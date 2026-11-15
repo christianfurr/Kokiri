@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import worker from '../src/worker.ts';
 import { CatalogDatabase } from './database.mjs';
@@ -113,7 +113,11 @@ export async function main() {
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function launchedAsEntryPoint() {
+  try { return process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href; }
+  catch { return false; }
+}
+if (launchedAsEntryPoint()) {
   main().catch(error => {
     const code = /^[a-z0-9_]+$/.test(error.message) ? error.message : /^[A-Z0-9_]+$/.test(error.code) ? error.code : 'initialization_failed';
     console.error(JSON.stringify({ event: 'catalog_start_failed', code })); process.exitCode = 1;

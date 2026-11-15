@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
@@ -24,9 +24,10 @@ function fixtureRoot(t) {
 
 test('bundled CLI starts under file permissions, closes gracefully, snapshots and restores without overwrite', { skip: !stage }, async t => {
   const { root, env } = fixtureRoot(t);
+  symlinkSync(stage, join(root, 'current'), 'dir');
   const socket = createServer(); await new Promise(r => socket.listen(0, '127.0.0.1', r));
   const port = socket.address().port; await new Promise(r => socket.close(r));
-  const child = spawn(process.execPath, ['--permission', '--allow-fs-read=' + stage, '--allow-fs-read=' + root, '--allow-fs-write=' + join(root, 'data'), join(stage, 'server.mjs')], { env: { ...env, KOKIRI_CATALOG_PORT: String(port) } });
+  const child = spawn(process.execPath, ['--permission', '--allow-fs-read=' + stage, '--allow-fs-read=' + root, '--allow-fs-write=' + join(root, 'data'), join(root, 'current', 'server.mjs')], { env: { ...env, KOKIRI_CATALOG_PORT: String(port) } });
   let stdout = '', stderr = '';
   child.stdout.on('data', b => { stdout += b; }); child.stderr.on('data', b => { stderr += b; });
   const done = new Promise(r => child.once('close', code => r(code)));
