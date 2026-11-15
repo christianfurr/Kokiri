@@ -7641,11 +7641,12 @@ static void variant_record(NSData *raw) {
 }
 #endif
 /* The seed's libraries are the device's (iOS; on the Mac TOTK_SHADER_DEVICE_LIBS=1, the pipeline-archive mode). */
+#include "nvn_shader_device_libs.h"
 static int shader_device_libs(void) {
 #if TARGET_OS_IPHONE
     return 1;
 #else
-    static int on = -1; if (on < 0) { const char *dl = getenv("TOTK_SHADER_DEVICE_LIBS"); on = dl && !strcmp(dl, "1"); }
+    static int on = -1; if (on < 0) on = nvn_shader_device_libs_enabled(getenv("TOTK_SHADER_DEVICE_LIBS"));
     return on;
 #endif
 }

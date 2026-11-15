@@ -26,6 +26,7 @@ static ssize_t fixture_read(int fd, void *bytes, size_t length) {
 #include "../third_party/d2r_gfx/gfx/nvn/nvn_archive_library_snapshot.h"
 #undef read
 #include "../third_party/d2r_gfx/gfx/nvn/totk_shader_seed.h"
+#include "../third_party/d2r_gfx/gfx/nvn/nvn_shader_device_libs.h"
 
 static void require(BOOL ok, NSString *message) {
     if (!ok) { fprintf(stderr, "%s\n", message.UTF8String); exit(1); }
@@ -44,6 +45,13 @@ static void rejects(NSString *path, NSString *directory, NSDictionary *files, BO
 int main(int argc, const char **argv) {
     @autoreleasepool {
         require(argc == 2, @"usage: archive-library-snapshot <new-owned-fixture-directory>");
+        require(unsetenv("TOTK_SHADER_DEVICE_LIBS") == 0 && !nvn_shader_device_libs_enabled(getenv("TOTK_SHADER_DEVICE_LIBS")), @"unset device-library mode must be disabled");
+        const char *values[] = {"", "0", "1", "01", "true"};
+        const int enabled[] = {0, 0, 1, 0, 0};
+        for (size_t i = 0; i < sizeof values / sizeof values[0]; i++) {
+            require(setenv("TOTK_SHADER_DEVICE_LIBS", values[i], 1) == 0 &&
+                    nvn_shader_device_libs_enabled(getenv("TOTK_SHADER_DEVICE_LIBS")) == enabled[i], @"device-library enabled-value semantics changed");
+        }
         NSString *root = @(argv[1]); NSFileManager *fm = NSFileManager.defaultManager;
         require(root.isAbsolutePath && ![fm fileExistsAtPath:root], @"fixture root must be new and absolute");
         NSString *directory = [root stringByAppendingPathComponent:@"actual"];
@@ -118,7 +126,7 @@ int main(int argc, const char **argv) {
                 [[NSData dataWithContentsOfFile:sentinel] isEqual:good] &&
                 [before[NSFileModificationDate] isEqual:after[NSFileModificationDate]] &&
                 ![fm fileExistsAtPath:[root stringByAppendingPathComponent:@"must-not-escape"]], @"read-only seed changed cache/evidence");
-        printf("{\"validator\":\"production archive_library_snapshot and totk_seed_import_readonly\",\"positive_cases\":3,\"negative_cases\":13,\"owning_snapshot_unchanged\":true,\"seed_cache_unchanged\":true,\"metal_calls\":0}\n");
+        printf("{\"validator\":\"production archive_library_snapshot, totk_seed_import_readonly and nvn_shader_device_libs_enabled\",\"positive_cases\":3,\"negative_cases\":13,\"device_library_cases\":6,\"owning_snapshot_unchanged\":true,\"seed_cache_unchanged\":true,\"metal_calls\":0}\n");
     }
     return 0;
 }
