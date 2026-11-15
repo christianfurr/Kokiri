@@ -4,8 +4,9 @@
 The runtime loads <folder of the game binary>/shader-libs/<SHA-256 of the MSL>.metallib instead of compiling a translated
 shader's MSL when a draw first needs it (nvn_mtl.m shader_lib_prebuilt; build_app.py step_shader_libs does the same for
 the startup shaders it packs into the app, with the same compiler flags). After `seed-shaders` (scripts/ns2_shader_corpus.py)
-has translated every shader a Switch 2 game ships, this compiles those variants. Additional binding states and patched
-pipeline variants may still need compilation during play.
+has translated every shader a Switch 2 game ships, this compiles those variants. --variant-cache also includes patched
+pipeline sources recorded by a compatible runtime or offline archive fill. Unseen binding states and patched pipeline
+variants may still need compilation during play.
 Each library is named by its source, so a run reuses every one already built; a different compiler starts over.
 
   build_shader_libs.py --cache <translation cache (TOTK_SHADER_CACHE)> --out <folder of the game binary>/shader-libs
@@ -16,12 +17,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
-REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
-from build_app import METAL_FLAGS as BASE_METAL_FLAGS, metal_compiler   # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from metal_toolchain import METAL_FLAGS as BASE_METAL_FLAGS, metal_compiler   # noqa: E402
+from prepare_shader_seed import CHAIN   # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'dev'))
 from game_slot import GameSlot
 
@@ -78,10 +80,45 @@ def recorded_libraries(out):
         return {}
 
 
+def recorded_variants(caches):
+    """Return patched sources from explicitly selected, same-chain runtime caches.
+
+    Patched MSL has no binding reflection of its own. Its source hash is both the
+    recorded filename and the runtime library lookup key. Available base
+    reflections must agree with the cache identity; none of those base shaders
+    are imported here (the seed verifies their actual runtime requests).
+    """
+    sources, provenance = {}, []
+    for cache in caches:
+        identity_path = cache/'pipelines/identity.json'
+        identity = json.loads(identity_path.read_text())
+        if not isinstance(identity, dict) or identity.get('chain') != CHAIN:
+            raise ValueError('incompatible patched-variant cache: ' + str(cache))
+        for reflection in sorted(cache.glob('*_b.json')):
+            metadata = json.loads(reflection.read_text())
+            if not isinstance(metadata, dict) or metadata.get('chain') != CHAIN:
+                raise ValueError('incompatible cached reflection: ' + str(reflection))
+        hashes = {}
+        for source in sorted((cache/'variants').glob('*.metal')):
+            source_hash = digest(source)
+            if not re.fullmatch(r'[0-9a-f]{64}\.metal', source.name) or source.stem != source_hash:
+                raise ValueError('patched-variant filename does not match source hash: ' + str(source))
+            previous = sources.get(source.name)
+            if previous and digest(previous) != source_hash:
+                raise ValueError('conflicting patched-variant caches for ' + source.name)
+            sources[source.name] = source
+            hashes[source.name] = source_hash
+        provenance.append(dict(path=str(cache.resolve()), identity=identity,
+                               identity_sha256=digest(identity_path), sources=hashes))
+    return sources, provenance
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--cache', type=Path, action='append', required=True,
                    help='translation cache; repeat to include recorded binding variants')
+    p.add_argument('--variant-cache', type=Path, action='append', default=[],
+                   help='same-chain runtime cache; include all its recorded patched variants (repeatable)')
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--jobs', type=int, default=4)
     p.add_argument('--only', type=Path, help='compile only these shaders (one 64-hex key per line); the rest are compiled by the game at first use')
@@ -102,6 +139,8 @@ def main():
     if a.only:
         wanted = {line.strip() for line in a.only.read_text().splitlines() if line.strip()}
         source_files = {n: s for n, s in source_files.items() if n.split('-')[0].split('_')[0] in wanted}
+    variants, variant_caches = recorded_variants(a.variant_cache)
+    source_files.update(variants)
     sources = list(source_files.values())
     if not sources:
         sys.exit(f'[RED] {a.cache}: no translated shaders (*_b.metal)')
@@ -128,7 +167,10 @@ def main():
             if seed_known.get(src.name) and src.parent.resolve() in {c.resolve() for c in a.cache}:
                 return seed_known[src.name]
             read[0] += 1
-            return digest(src)
+            source_hash = digest(src)
+            if src.name in variants and source_hash != src.stem:
+                raise ValueError('patched-variant source changed during preparation: ' + str(src))
+            return source_hash
         source_digests = list(pool.map(source_digest, sources))
         def lib_ok(sha):
             lib = a.out/f'{sha}.metallib'
@@ -198,6 +240,7 @@ def main():
         if library.is_file() and digest(library) == expected:
             files[name] = expected
     report = dict(schema=1, compiler=identity, complete=not failed, subset=bool(a.only), sources=source_hashes, files=files,
+                  variant_caches=variant_caches,
                   parser_depths={k: v for k, v in parser_depths.items() if k in files},
                   preparation_sha256=digest(Path(__file__).resolve()))
     partial = manifest.with_suffix('.partial')
