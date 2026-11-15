@@ -11,7 +11,7 @@ Kokiri brings the **Nintendo Switch 2 edition of Ocarina of Time** to Apple sili
 
 **Development preview.** There is no stable release yet. Gameplay verification and performance work are ongoing; major FPS drops, cold compilation stalls, high memory use and Death Mountain rendering corruption remain open. The shared shader catalog is in development and has no live public service yet.
 
-[Build and try it](#try-kokiri) · [Report a problem](https://github.com/christianfurr/Kokiri/issues) · [Contribute](CONTRIBUTING.md) · [Catalog integration](docs/catalog/integration.md)
+[Website & HUD preview](https://christianfurr.github.io/Kokiri/) · [Build and try it](#try-kokiri) · [Report a problem](https://github.com/christianfurr/Kokiri/issues) · [Contribute](CONTRIBUTING.md) · [Catalog integration](docs/catalog/integration.md)
 
 ![Kokiri native Home window](assets/readme/kokiri-home.png)
 
