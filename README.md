@@ -2,23 +2,50 @@
   <img src="assets/brand/kokiri-mark.png" width="150" alt="Kokiri leaf K logo">
 </p>
 <h1 align="center">Kokiri</h1>
-<p align="center">Ocarina of Time. A home on your Mac.</p>
+<p align="center">Ocarina of Time for Apple silicon Macs.</p>
 <p align="center">Apple silicon · macOS 26 · native ARM64 · Metal</p>
 
-Kokiri is an independent Mac project built from the credited [MacNativeGames](https://github.com/ly05010419/MacNativeGames) native runtime. It brings a native game library, local session statistics and an open pipeline catalog into one Mac application. You build the game from your own files.
+[![Source and native app checks](https://github.com/christianfurr/Kokiri/actions/workflows/checks.yml/badge.svg)](https://github.com/christianfurr/Kokiri/actions/workflows/checks.yml)
 
-**Development preview.** The native app compiles and the public shader tools build from source. Fresh Kokiri gameplay verification is in progress. Major FPS drops, cold compilation hitches, high physical memory use and Death Mountain corruption remain open work. There is no stable release or live public catalog yet.
+Kokiri brings the **Nintendo Switch 2 edition of Ocarina of Time** to Apple silicon Macs, with a native launcher, custom in-game settings and a configurable performance HUD. It builds on the credited [MacNativeGames](https://github.com/ly05010419/MacNativeGames) native ARM64 and Metal runtime. You build the game locally from your own files.
+
+**Development preview.** There is no stable release yet. Gameplay verification and performance work are ongoing; major FPS drops, cold compilation stalls, high memory use and Death Mountain rendering corruption remain open. The shared shader catalog is in development and has no live public service yet.
+
+[Build and try it](#try-kokiri) · [Report a problem](https://github.com/christianfurr/Kokiri/issues) · [Contribute](CONTRIBUTING.md) · [Catalog integration](docs/catalog/integration.md)
 
 ![Kokiri native Home window](assets/readme/kokiri-home.png)
 
-Actual native app window, 2026-11-15. This capture connects an existing compatible game build.
+Actual native app window, captured 2026-11-15 with an existing compatible game build.
 
-## The Mac experience
+## What Kokiri adds
 
-- **A native home.** Connect a built game, copy your complete save profile, and launch through a SwiftUI app. Existing progress stays in its original location.
-- **Make the HUD yours.** Choose its corner, size and detail in Kokiri or the game menu. Matching runtimes advertise this capability; older apps keep their own controls.
-- **See the session.** Inspect physical footprint, sampled area and optional frame timing. Recorded sessions carry their date and build; generated frames are excluded from the observed game rate.
-- **Signed updates.** Sparkle integration supports automatic checks and downloads. Public release signing, the production feed and end-to-end installation tests are still required.
+- **A native Mac launcher.** Connect a compatible built game, import a copy of your complete save profile, and launch from SwiftUI. Your original profile stays in its original location.
+- **Custom in-game settings.** Open Kokiri's menu with **L3 + R3** or **key 1** on matching runtimes. The controller shortcut still needs physical-controller verification.
+- **A configurable performance HUD.** Choose four corners, four sizes and three detail modes. Position, size and detail have been checked in gameplay and persist between launches.
+- **Local session statistics.** Inspect physical memory use, sampled area and optional frame timing. Recordings show their date and build, and observed game rates exclude generated frames.
+
+Kokiri also develops an **open shader and pipeline catalog** that compatible projects can integrate. Signed app updates use Sparkle; production signing, the public update feed and installation verification are still pending.
+
+## Try Kokiri
+
+This preview currently requires a source build. Start with the requirements below, then follow the [build instructions](#build-from-source). If you already have a compatible game app, the native launcher can connect to it; Kokiri-specific controls require a runtime that supports them.
+
+| Requirement | Current support |
+| --- | --- |
+| Mac | Apple silicon |
+| Operating system | macOS 26 |
+| Build tools | Xcode; Python 3.14 for the game builder |
+| Game input | Your own Nintendo Switch 2 dump, title `0400486024DEC000`, update `131072` |
+| Other inputs | Your own required shared firmware fonts; see the builder instructions |
+| Distribution | Source preview; no stable, notarized download yet |
+
+**This build does not accept an N64 or Nintendo 3DS ROM.** Game files, firmware fonts and generated game apps are not distributed in this repository.
+
+## Help test and follow development
+
+We need reproducible gameplay reports, especially from **Castle Town, Death Mountain and repeated area transitions**. Include your build, Mac chip, RAM, macOS version, internal/output resolution, frame-generation settings and the route that triggers the issue. Note whether it happens on a first visit or a repeat visit.
+
+[Open an issue](https://github.com/christianfurr/Kokiri/issues) or read the [contribution guide](CONTRIBUTING.md). Keep dumps, keys, saves, translated shaders and private logs out of public attachments. Use GitHub's **Watch** menu to follow repository activity, or **Star** the project to bookmark it.
 
 ## A library other recompilers can use
 
@@ -28,9 +55,11 @@ After a one-time choice, clients can queue contributions, deduplicate them and r
 
 The first adapter supports the credited runtime's metadata format. Other projects can implement that format or contribute a versioned adapter. [Integration guide](docs/catalog/integration.md) · [Contribution flow](docs/catalog/contributions.md)
 
-## Build it
+Native warm-plan integration is being verified. Its first path accepts ordinary compute/render recipes with locally verified Metal JIT variants. Mesh pipelines and precompiled shader-library installs remain reference-only; the catalog does not yet remove their observed compilation stalls.
 
-You need Apple silicon, macOS 26 and Xcode. The supported game input is your own Nintendo Switch 2 dump of title `0400486024DEC000`, update `131072`; this build does not accept an N64 ROM. Game files and firmware fonts are not distributed here.
+## Build from source
+
+Check the [requirements](#try-kokiri) before building. The launcher and the private game app are separate builds.
 
 Build the native product app:
 
@@ -52,21 +81,23 @@ python3.14 engine/build.py /path/to/your/dump \
 
 The builder verifies the supported input and rebuilds shader tooling from pinned source. Keep the work folder outside this checkout. See the [Mac app guide](macos/README.md) and [source provenance](engine/docs/kokiri-source-provenance.md).
 
-## Performance, with evidence
+## Gameplay status and performance
 
-We test movement, camera turns and repeated area transitions. We report game presentation rates separately from interpolation, and process physical footprint separately from reported Metal allocation.
+| Area | Current status |
+| --- | --- |
+| Native launcher | Compiles; Home and Performance screenshots show the implemented app |
+| Custom menu and HUD | Checked in a copied-profile gameplay session; physical L3 + R3 verification remains open |
+| Whole-game performance | Unverified; severe FPS drops, compilation stalls and memory growth remain open |
+| Death Mountain rendering | Corruption remains under investigation |
+| Public catalog and automatic updates | Local implementation exists; production delivery remains pending |
 
-The earlier runtime investigation completed a **789.84-second, five-cycle** copied-profile route with **15 measured windows**. The final nine windows had no presentation gaps above 100 ms, but the full-cycle physical-memory peak still rose by **485.95 MiB**. Those measurements used an experimental texture budget and the older v23 shader chain. They are a diagnostic baseline, not a Kokiri speed claim or a proven memory ceiling.
+New results need a matching build, hardware, resolution, tested route and cache state. We report actual game presentation rates separately from frame generation. We do not claim whole-game 60 FPS or a performance advantage over another project.
 
-[Baseline and measurement limits](docs/performance.md)
+The [performance evidence and testing method](docs/performance.md) include an older v23 runtime diagnostic baseline. Those figures do not measure the current Kokiri build.
 
 ![Kokiri showing a dated performance recording](assets/readme/kokiri-performance.png)
 
-Actual session viewer with an earlier v23 recording. These displayed figures are not new Kokiri gameplay results.
-
-## Contribute
-
-Start with [CONTRIBUTING.md](CONTRIBUTING.md). Useful reports include the build, Mac chip, output/internal resolution, pacing settings, area and a reproducible route. Please keep dumps, keys, saves, translated shaders and private logs out of issues and pull requests.
+Actual session viewer displaying an earlier v23 recording. The displayed figures are historical observations, not current Kokiri benchmarks.
 
 ## Credits and license
 
