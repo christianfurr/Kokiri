@@ -1,5 +1,7 @@
 """Small offline safety checks; fixtures are not gameplay or distribution evidence."""
 import base64
+import contextlib
+import io
 from copy import deepcopy
 import importlib.util
 import json
@@ -78,7 +80,7 @@ class RuntimeUpdateTests(unittest.TestCase):
         receipt = dict(schema='kokiri-preparation-receipt-v1', mode='full', prepared=True, errors=[],
                        identity=dict(source_commit=self.record['source_commit'], chain=self.record['shader_chain'],
                                      runtime_sha256=runtime.sha(executable), translation_context_sha256='c' * 64,
-                                     translator_sha256='d' * 64),
+                                     translator_sha256='d' * 64, gpu_architecture='apple-gpu-fixture'),
                        variants=dict(default=dict(requested=2, completed=2, failed=0),
                                      listed=dict(requested=0, completed=0, failed=0), unique_completed=2),
                        artifact_sha256=dict(runtime_sha256=runtime.sha(executable)),
@@ -86,6 +88,21 @@ class RuntimeUpdateTests(unittest.TestCase):
                        pipelines=dict(requested=2, completed=2, failed=0, write_failed=0, unaccounted=0))
         info = dict(CFBundleIdentifier=runtime.PRODUCT, CFBundleExecutable='KokiriGame', KokiriGameUpdate='131072',
                     KokiriPrepared=True, KokiriShaders='full', KokiriSourceCommit=self.record['source_commit'])
+        build = app / 'Contents/Resources/totk/build'
+        artifact_paths = {
+            'seed_manifest_sha256': build / 'shader-seed/seed-manifest.json',
+            'libraries_manifest_sha256': build / 'shader-libs/libraries-manifest.json',
+            'pipeline_manifest_sha256': build / 'pipelines/compute-manifest.json',
+        }
+        for name, path in artifact_paths.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = path.parent / 'fixture-payload.dat'
+            payload.write_bytes(('offline fixture ' + name).encode())
+            path.write_text(json.dumps(dict(files={payload.name: runtime.sha(payload)})))
+            receipt['artifact_sha256'][name] = runtime.sha(path)
+        index = build / 'pipelines/pipelines-apple-gpu-fixture.tsv'
+        index.write_text('offline fixture pipeline index\n')
+        receipt['artifact_sha256']['pipeline_index_sha256'] = runtime.sha(index)
         self.write_receipt(app, receipt, info)
         return app, receipt, info
 
@@ -203,6 +220,43 @@ class RuntimeUpdateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'bind'):
                 runtime.inspect_app(app, self.record)
 
+    def test_prepared_payload_tampering_is_rejected_with_codesign_mocked(self):
+        app, receipt, info = self.app()
+        payload = app / 'Contents/Resources/totk/build/shader-libs/fixture-payload.dat'
+        payload.write_bytes(b'changed shader library fixture')
+        with patch.object(runtime.subprocess, 'run'):
+            with self.assertRaisesRegex(ValueError, 'payload differs'):
+                runtime.inspect_app(app, self.record)
+
+    def test_prepared_payload_cannot_escape_the_app(self):
+        app, receipt, info = self.app()
+        payload = app / 'Contents/Resources/totk/build/shader-libs/fixture-payload.dat'
+        external = self.root / 'outside-payload.dat'
+        external.write_bytes(payload.read_bytes())
+        payload.unlink()
+        payload.symlink_to(external)
+        with patch.object(runtime.subprocess, 'run'):
+            with self.assertRaisesRegex(ValueError, 'payload differs'):
+                runtime.inspect_app(app, self.record)
+
+    def test_retained_prepared_identity_rehashes_shader_payloads(self):
+        app, receipt, info = self.app()
+        with patch.object(runtime.subprocess, 'run'):
+            identity = runtime.inspect_app(app, self.record)
+            runtime.unchanged(identity)
+            payload = app / 'Contents/Resources/totk/build/shader-seed/fixture-payload.dat'
+            payload.write_bytes(b'changed retained seed fixture')
+            with self.assertRaisesRegex(ValueError, 'payload differs'):
+                runtime.unchanged(identity)
+
+    def test_invalid_gpu_archive_identity_is_rejected(self):
+        app, receipt, info = self.app()
+        receipt['identity']['gpu_architecture'] = '../outside'
+        self.write_receipt(app, receipt, info)
+        with patch.object(runtime.subprocess, 'run'):
+            with self.assertRaisesRegex(ValueError, 'GPU archive identity'):
+                runtime.inspect_app(app, self.record)
+
     def test_boolean_compilation_counts_are_not_integers(self):
         app, receipt, info = self.app()
         for section, field in [('libraries', 'completed'), ('libraries', 'failed'),
@@ -225,9 +279,9 @@ class RuntimeUpdateTests(unittest.TestCase):
         folder = store / 'version-2'
         folder.mkdir(mode=0o700)
         self.manifest(folder=folder)
-        candidate = dict(app=str(folder / 'Kokiri Game.app'), executable_sha256='1' * 64, info_sha256='2' * 64,
-                         code_resources_sha256='6' * 64, version=2, source_commit='a' * 40, preparation_receipt_sha256='3' * 64,
-                         shader_chain=self.record['shader_chain'])
+        app, _, _ = self.app(folder)
+        with patch.object(runtime.subprocess, 'run'):
+            candidate = runtime.inspect_app(app, self.record)
         baseline = dict(app=str(self.root / 'Baseline.app'), executable_sha256='4' * 64,
                         info_sha256='5' * 64, code_resources_sha256='7' * 64)
         runtime.atomic_json(folder / 'transaction.json', dict(phase='prepared', version=2,
@@ -337,11 +391,63 @@ class RuntimeUpdateTests(unittest.TestCase):
             with runtime.store_lock(linked):
                 self.fail('Linked store directory was accepted')
 
-    def test_game_process_detection_is_observation_only(self):
-        with patch.object(runtime.subprocess, 'check_output', return_value='/Applications/Ocarina.app/Contents/MacOS/OcarinaOfTime\n'):
+    def test_builder_group_exemption_does_not_hide_unrelated_gameplay(self):
+        owned = '123 123 /private/build/oot-native\n'
+        with patch.object(runtime.subprocess, 'check_output', return_value=owned):
+            runtime.game_closed(owned_process_group=123)
             with self.assertRaises(ValueError):
                 runtime.game_closed()
-        with patch.object(runtime.subprocess, 'check_output', return_value='/usr/bin/other\n'):
+        human = '456 456 /Applications/Ocarina.app/Contents/MacOS/OcarinaOfTime\n'
+        with patch.object(runtime.subprocess, 'check_output', return_value=owned + human):
+            with self.assertRaisesRegex(ValueError, 'Close the game normally'):
+                runtime.game_closed(owned_process_group=123)
+        with patch.object(runtime.subprocess, 'check_output', return_value='789 789 /other/oot-native\n'):
+            with self.assertRaises(ValueError):
+                runtime.game_closed(owned_process_group=123)
+
+    def test_unrecognized_process_snapshot_blocks_updates(self):
+        with patch.object(runtime.subprocess, 'check_output', return_value='unexpected snapshot\n'):
+            with self.assertRaisesRegex(ValueError, 'Unrecognized process snapshot'):
+                runtime.game_closed()
+
+    def test_store_location_refusal_makes_no_source_or_work_writes(self):
+        trusted, original = self.root / 'trusted', self.root / 'original-work'
+        trusted.mkdir()
+        original.mkdir()
+        with patch.object(runtime, 'ROOT', trusted):
+            for path in (trusted, trusted / 'private-runtime-store'):
+                with self.subTest(source_store=path):
+                    with self.assertRaises(ValueError):
+                        with runtime.store_lock(path):
+                            self.fail('Source-nested store was accepted')
+                    self.assertFalse((path / '.lock').exists())
+            nested = original / 'private-runtime-store'
+            with self.assertRaises(ValueError):
+                runtime.validate_store_location(nested, original)
+            self.assertFalse(nested.exists())
+        self.assertEqual(list(trusted.iterdir()), [])
+        self.assertEqual(list(original.iterdir()), [])
+
+    def test_cli_rejects_work_nested_store_before_lock_or_delivery(self):
+        original = self.root / 'original-work'
+        original.mkdir()
+        nested = original / 'private-runtime-store'
+        arguments = ['runtime_update.py', '--store', str(nested), 'stage',
+                     '--manifest', str(self.root / 'missing-manifest'), '--public-key', self.public,
+                     '--current-app', str(self.root / 'missing.app'), '--work', str(original),
+                     '--python', '/unneeded/python']
+        with patch.object(runtime.sys, 'argv', arguments), patch.object(runtime, 'store_lock') as locked, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(runtime.main(), 1)
+        locked.assert_not_called()
+        self.assertFalse(nested.exists())
+        self.assertEqual(list(original.iterdir()), [])
+
+    def test_game_process_detection_is_observation_only(self):
+        with patch.object(runtime.subprocess, 'check_output', return_value='123 45 /Applications/Ocarina.app/Contents/MacOS/OcarinaOfTime\n'):
+            with self.assertRaises(ValueError):
+                runtime.game_closed()
+        with patch.object(runtime.subprocess, 'check_output', return_value='456 78 /usr/bin/other\n'):
             runtime.game_closed()
 
 
