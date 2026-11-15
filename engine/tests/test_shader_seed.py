@@ -103,6 +103,28 @@ class SeedTests(unittest.TestCase):
                                        expected_listed_requests=0)
         self.assertEqual(report['listed_requests'], 0)
 
+    def test_original_source_census_detects_binding_omitted_by_partition(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder)/'shader_list.tsv'
+            keys = ['a'*64, 'b'*64]
+            outside = 'c'*64
+            binding = json.dumps({'tex': {'0': '*2d'}}, separators=(',', ':'))
+            source.write_text(''.join(f'V\t{key}\t{binding}\n' for key in keys)+
+                              f'V\t{outside}\t{binding}\n')
+            inventory = dict.fromkeys(keys)
+            expected = seed.source_listed_requests(source, inventory)
+            self.assertEqual(expected, 2)  # out-of-corpus rows are not runtime requests
+            first_verified = {keys[0]+'-'+'d'*12, keys[0]+'-'+'e'*12}
+            first = seed.batch_completion(self.completion(1, 1, 1, 2), keys[:1], first_verified,
+                                          has_list=True, expected_listed_requests=1)
+            # A broken partition dropped the second V row and its own plan says zero.
+            second_verified = {keys[1]+'-'+'d'*12}
+            second = seed.batch_completion(self.completion(1), keys[1:], second_verified,
+                                           has_list=True, expected_listed_requests=0)
+            with self.assertRaisesRegex(ValueError, 'source binding plan'):
+                seed.aggregate_batches(inventory, [first, second], first_verified | second_verified,
+                                       expected_listed_requests=expected)
+
     def test_bounded_pilot_checkpoints_actual_outputs_without_publishing_full_seed(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

@@ -234,6 +234,22 @@ def listed_request_count(rows):
     return count
 
 
+def source_listed_requests(shader_list, inventory):
+    """Census the original source independently of any partition's filtering."""
+    if not shader_list:
+        return 0
+    rows = []
+    for line in Path(shader_list).read_text().splitlines():
+        if not line.startswith('V\t'):
+            continue
+        fields = line.split('\t')
+        if len(fields) != 3 or not re.fullmatch('[0-9a-f]{64}', fields[1]):
+            raise ValueError('invalid recorded shader binding row')
+        if fields[1] in inventory:
+            rows.append(line)
+    return listed_request_count(rows)
+
+
 def partition_corpus(path, folder, batch_size=500, shader_list=None):
     """Bound each process by defaults plus all supplied V rows, conservatively.
 
@@ -445,15 +461,18 @@ def main():
                TOTK_SHADER_SERVICE='native', TOTK_XLATE_SPIRV_CROSS='inproc',
                TOTK_SEED_VERIFY='1')
     batch_dir = a.logs/f'ns2-seed-{v}-batches-{time.time_ns()}'
-    batches = partition_corpus(corpus, batch_dir, a.batch_size, seed_list)
     inventory = corpus_inventory(corpus)
+    source_listed_total = source_listed_requests(seed_list, inventory)
+    batches = partition_corpus(corpus, batch_dir, a.batch_size, seed_list)
+    if sum(batch['listed_requests'] for batch in batches) != source_listed_total:
+        raise ValueError('partition listed requests differ from the original source binding plan')
     progress_path = batch_dir/'progress.json'
     progress = dict(schema=1, status='incomplete', corpus_sha256=sha256(corpus),
                     runtime_sha256=sha256(a.binary), translator_sha256=sha256(prebuilt),
                     translation_context_sha256=context, batch_size=a.batch_size, jobs=a.jobs,
                     planned_batches=len(batches), corpus_shaders=len(inventory),
                     known_requests=sum(batch['known_requests'] for batch in batches), batches=[])
-    progress['listed_requests'] = sum(batch['listed_requests'] for batch in batches)
+    progress['listed_requests'] = source_listed_total
     atomic_json(progress_path, progress)
     print(f"seed batches: {len(batches)}, at most {a.batch_size} known requests per process; progress {progress_path}", flush=True)
     verified = set()
