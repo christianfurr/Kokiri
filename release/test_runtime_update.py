@@ -174,6 +174,47 @@ class RuntimeUpdateTests(unittest.TestCase):
         with patch.object(runtime.subprocess, 'run'):
             self.assertEqual(runtime.inspect_app(app, self.record)['version'], 2)
 
+    def test_trusted_validator_missing_linked_or_unsupported_fails_closed(self):
+        missing = self.root / 'missing-trusted-helper.py'
+        linked = self.root / 'linked-trusted-helper.py'
+        linked.symlink_to(runtime.TRUSTED_COMPILER_HELPER)
+        unsupported = self.root / 'unsupported-trusted-helper.py'
+        unsupported.write_text('compiler_context_key = None\n')
+        downloaded = self.root / 'version-2/source/engine/scripts/metal_toolchain.py'
+        downloaded.parent.mkdir(parents=True)
+        downloaded.write_text('raise AssertionError("Downloaded helper must never be imported")\n')
+        for helper in (missing, linked, unsupported):
+            with self.subTest(helper=helper.name):
+                with patch.object(runtime, 'TRUSTED_COMPILER_HELPER', helper):
+                    with self.assertRaisesRegex(ValueError, 'Trusted compiler validator'):
+                        runtime.load_trusted_compiler_validator()
+
+    def test_stage_missing_trusted_validator_refuses_before_work_or_trust_mutation(self):
+        store, work, app = self.root / 'store', self.root / 'original-work', self.root / 'Original.app'
+        for folder in (store, work, app):
+            folder.mkdir(mode=0o700)
+        manifest, signature = self.manifest()
+        archive = self.root / 'unneeded-source.zip'
+        archive.write_bytes(b'not an archive; trusted-helper admission must fail first')
+        with patch.object(runtime, 'TRUSTED_COMPILER_HELPER', self.root / 'missing-trusted-helper.py'), \
+                patch.object(runtime, 'verify_manifest', wraps=runtime.verify_manifest) as verified, \
+                patch.object(runtime, 'inspect_app') as inspected, \
+                patch.object(runtime, 'clone_work') as cloned, \
+                patch.object(runtime, 'build_candidate') as built, \
+                patch.object(runtime, 'extract_source') as extracted, \
+                patch.object(runtime, 'game_closed') as observed, \
+                patch.object(runtime, 'pin_key') as trusted, \
+                patch.object(runtime.subprocess, 'run') as native:
+            with self.assertRaisesRegex(ValueError, 'Trusted compiler validator unavailable'):
+                runtime.stage(store, manifest, signature, self.public, archive, app, work,
+                              self.root / 'unneeded-python')
+        verified.assert_called_once_with(manifest, signature, self.public, 0)
+        for action in (inspected, cloned, built, extracted, observed, trusted, native):
+            action.assert_not_called()
+        self.assertEqual(list(store.iterdir()), [])
+        self.assertEqual(list(work.iterdir()), [])
+        self.assertEqual(list(app.iterdir()), [])
+
     def test_candidate_rejects_old_missing_or_boolean_context_schema_despite_resealed_receipt(self):
         app, original, original_info = self.app()
         original_manifest = self.library_manifest(app)
@@ -255,7 +296,7 @@ class RuntimeUpdateTests(unittest.TestCase):
                 # Even matching, rehashed receipt/manifest bytes must fail the
                 # shared validator when loader admission was not established.
                 with patch.object(runtime.subprocess, 'run'):
-                    with self.assertRaisesRegex(ValueError, 'Invalid qualified compiler observation'):
+                    with self.assertRaisesRegex(ValueError, 'loader-environment policy'):
                         runtime.inspect_app(app, self.record)
 
     def test_candidate_requires_current_target_and_each_correctness_flag(self):
