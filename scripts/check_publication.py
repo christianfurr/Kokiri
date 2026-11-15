@@ -11,6 +11,14 @@ PINNED_METADATA = {
     "engine/assets/shader_list.tsv": "db776121d89d47912088dac9ff9fb10b9de38084242a39a374b1e0f722f9a6e4",
     "engine/assets/romfs-v131072.tsv.gz": "c6aebc42c403721d5a0e060e385de28c6bad54afa52e1153cf8ba49895f0d6a9",
 }
+# Exact hashes bind the website exceptions to visually reviewed image bytes.
+REVIEWED_WEBSITE_IMAGES = {
+    "website/assets/forest.jpg": "2c04bb88c2ae6e6ede68b6aed2b51b572d06323828e89adc7d7fe92d5a471a6a",
+    "website/assets/hyrule-field.jpg": "3bb38871a4368f363e97049dfa5c252c9c3ae449a218cef874de63808dd76ee1",
+    "website/assets/kakariko.jpg": "afdf3452c54ab83e497806af7926892fde08aad5c2d033615b586f74f689f228",
+    "website/assets/kokiri-home.png": "99a1a4937ec420ce0f4fdd069b3041928d2a5379d346a895c8f19aa554fdf5af",
+    "website/assets/kokiri-mark.png": "fabe818a53f39cf79e7102264c2152cff977f4c9b0c5794a74f66013ef44eaa2",
+}
 APPROVED_IMAGES = {
     "assets/brand/kokiri-mark.png",
     "assets/readme/kokiri-home.png",
@@ -47,6 +55,8 @@ def issue(name: str, data: bytes, mode: str = "100644") -> str | None:
         return "file exceeds source size bound"
     if name in PINNED_METADATA:
         return None if hashlib.sha256(data).hexdigest() == PINNED_METADATA[name] else "public metadata pin changed; review provenance"
+    if name in REVIEWED_WEBSITE_IMAGES:
+        return None if hashlib.sha256(data).hexdigest() == REVIEWED_WEBSITE_IMAGES[name] else "website image changed; review provenance"
     if name in APPROVED_IMAGES:
         return None if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) <= 8 << 20 else "invalid approved image"
     if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".gz", ".tsv"}:

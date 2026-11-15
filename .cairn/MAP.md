@@ -14,6 +14,7 @@ New independent repository. Source integration and product verification are in p
 - `macos/`: SwiftUI product UI, local profile import/launch, measured session reader and Sparkle updater. Real Home/Performance captures are in `assets/readme/`; current source has passed the existing 12 core tests.
 - `services/catalog/`: open exact-context metadata protocol, Worker/D1 service, quarantine/signing, queue SDK and local tests.
 - `assets/brand/`: original Kokiri logo and generation provenance.
+- `website/`: buildless GitHub Pages site with an interactive, sample-data HUD preview; asset provenance and local preview instructions live alongside it. `.github/workflows/pages.yml` publishes only this folder.
 - `release/`: signed shell archive/appcast/delta preparation; 20 checks include actual delta reconstruction and tamper rejection. Production signing/hosting remains unavailable.
 - `docs/`: build, adapter, privacy and measured-performance documentation. Catalog hosting and native warm-plan adoption remain acceptance work.
 

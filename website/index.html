@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#102b22" />
+    <title>Kokiri — Ocarina of Time for Mac</title>
+    <meta
+      name="description"
+      content="A native Mac home for the Switch 2 edition of Ocarina of Time. Explore Kokiri's custom HUD, native launcher and open shader catalog project."
+    />
+    <meta property="og:title" content="Kokiri — Ocarina of Time for Mac" />
+    <meta
+      property="og:description"
+      content="A familiar world. A native Mac home. Explore the interactive HUD preview and help shape Kokiri."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://christianfurr.github.io/Kokiri/" />
+    <meta
+      property="og:image"
+      content="https://christianfurr.github.io/Kokiri/assets/hyrule-field.jpg"
+    />
+    <link rel="icon" type="image/png" href="assets/kokiri-mark.png" />
+    <link
+      rel="preload"
+      as="image"
+      href="assets/forest.jpg"
+      fetchpriority="high"
+    />
+    <link rel="stylesheet" href="style.css" />
+    <script src="site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="header">
+      <a class="wordmark" href="#" aria-label="Kokiri home"
+        ><img
+          src="assets/kokiri-mark.png"
+          alt=""
+          width="42"
+          height="42"
+        />kokiri</a
+      >
+      <nav aria-label="Main navigation">
+        <a href="#experience">The experience</a>
+        <a href="#hud">Try the HUD</a>
+        <a href="#catalog">Shader catalog</a>
+      </nav>
+      <a class="nav-link" href="https://github.com/christianfurr/Kokiri"
+        >GitHub <span aria-hidden="true">↗</span></a
+      >
+    </header>
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <img
+          class="forest"
+          src="assets/forest.jpg"
+          alt=""
+          width="1672"
+          height="941"
+          fetchpriority="high"
+        />
+        <div class="hero-shade"></div>
+        <div class="hero-content wrap">
+          <p class="eyebrow">Ocarina of Time for Mac</p>
+          <h1 id="hero-title">
+            A familiar world.<br /><em>A native home.</em>
+          </h1>
+          <p class="hero-description">
+            Your adventure, made at home on Apple silicon. A native launcher,
+            custom controls, and a HUD your way.
+          </p>
+          <div class="actions">
+            <a class="button button-light" href="#start"
+              >Get started <span aria-hidden="true">↗</span></a
+            ><a class="hero-secondary" href="#hud"
+              >Try the HUD <span aria-hidden="true">↓</span></a
+            >
+          </div>
+        </div>
+      </section>
+      <div class="platform-strip">
+        <div class="wrap strip-inner">
+          <span>Built for <strong>Apple silicon</strong></span
+          ><span>Native <strong>ARM64 + Metal</strong></span
+          ><span><strong>macOS 26</strong> required</span
+          ><span class="preview-state">Development preview</span>
+        </div>
+      </div>
+
+      <section
+        class="hud-section section wrap"
+        id="hud"
+        aria-labelledby="hud-title"
+      >
+        <div class="section-intro">
+          <p class="eyebrow green">Make it yours</p>
+          <h2 id="hud-title">
+            A little less guesswork.<br /><em>A little more your style.</em>
+          </h2>
+          <p>
+            Keep an eye on your session without losing sight of the adventure.
+            Find your corner, choose your size, keep what matters.
+          </p>
+        </div>
+        <div class="hud-workbench">
+          <div class="preview-column">
+            <div class="scene-toolbar">
+              <span class="scene-title">Explore the preview</span>
+              <div
+                class="scene-options"
+                role="group"
+                aria-label="Preview scene"
+              >
+                <button
+                  type="button"
+                  class="scene-button"
+                  data-scene="field"
+                  aria-pressed="true"
+                >
+                  Hyrule Field</button
+                ><button
+                  type="button"
+                  class="scene-button"
+                  data-scene="village"
+                  aria-pressed="false"
+                >
+                  Kakariko
+                </button>
+              </div>
+            </div>
+            <div
+              class="game-preview"
+              id="game-preview"
+              data-position="top-right"
+              data-detail="full"
+            >
+              <img
+                id="scene-image"
+                src="assets/hyrule-field.jpg"
+                alt="Earlier native runtime test capture of Link overlooking Hyrule Field"
+                width="1600"
+                height="1000"
+                loading="lazy"
+              />
+              <div
+                class="performance-hud"
+                id="performance-hud"
+                aria-label="Sample performance HUD"
+              >
+                <div class="hud-fps">FPS <strong>48.0</strong></div>
+                <div class="hud-full">Shaders 42,851 · Pipelines 6,204</div>
+                <div>Playtime 00:12:34</div>
+                <div class="hud-full">Process memory 8.20 GiB</div>
+                <div class="hud-full hud-hint">Settings: key 1 · L3 + R3</div>
+              </div>
+            </div>
+            <p class="preview-caption">
+              Interactive web preview · Sample HUD values, not a benchmark.
+              Backgrounds are earlier runtime test captures from November 14,
+              2026.
+            </p>
+          </div>
+          <form
+            class="hud-controls"
+            id="hud-controls"
+            aria-label="Customize the HUD preview"
+          >
+            <div class="controls-heading">
+              <h3>Your HUD.</h3>
+              <button type="reset" class="reset-button">Reset</button>
+            </div>
+            <fieldset>
+              <legend>Position</legend>
+              <div class="position-grid">
+                <label
+                  ><input type="radio" name="position" value="top-left" /><span
+                    ><b aria-hidden="true">↖</b>Top left</span
+                  ></label
+                >
+                <label
+                  ><input
+                    type="radio"
+                    name="position"
+                    value="top-right"
+                    checked
+                  /><span><b aria-hidden="true">↗</b>Top right</span></label
+                >
+                <label
+                  ><input
+                    type="radio"
+                    name="position"
+                    value="bottom-left"
+                  /><span><b aria-hidden="true">↙</b>Bottom left</span></label
+                >
+                <label
+                  ><input
+                    type="radio"
+                    name="position"
+                    value="bottom-right"
+                  /><span><b aria-hidden="true">↘</b>Bottom right</span></label
+                >
+              </div>
+            </fieldset>
+            <fieldset class="scale-field">
+              <legend>
+                Size <output id="scale-output" for="hud-size">100%</output>
+              </legend>
+              <label class="sr-only" for="hud-size">HUD size</label
+              ><input
+                id="hud-size"
+                name="size"
+                type="range"
+                min="75"
+                max="150"
+                step="25"
+                value="100"
+              />
+              <div class="range-labels"><span>75%</span><span>150%</span></div>
+            </fieldset>
+            <fieldset>
+              <legend>Detail</legend>
+              <div class="detail-options">
+                <label
+                  ><input type="radio" name="detail" value="off" /><span
+                    >Off</span
+                  ></label
+                >
+                <label
+                  ><input type="radio" name="detail" value="compact" /><span
+                    >FPS + time</span
+                  ></label
+                >
+                <label
+                  ><input
+                    type="radio"
+                    name="detail"
+                    value="full"
+                    checked
+                  /><span>Full</span></label
+                >
+              </div>
+            </fieldset>
+            <p class="control-note">
+              In the game, open settings with <kbd>1</kbd> or
+              <kbd>L3 + R3</kbd>. The controller shortcut is implemented;
+              physical-controller verification is pending.
+            </p>
+            <p
+              class="sr-only"
+              id="hud-status"
+              role="status"
+              aria-live="polite"
+            ></p>
+          </form>
+        </div>
+        <noscript
+          ><p class="noscript-note">
+            Enable JavaScript to customize the HUD preview. The rest of this
+            site works without it.
+          </p></noscript
+        >
+      </section>
+
+      <section
+        class="experience section wrap"
+        id="experience"
+        aria-labelledby="experience-title"
+      >
+        <div class="experience-copy">
+          <h2 id="experience-title">
+            Feels right.<br /><em>Right on your Mac.</em>
+          </h2>
+          <p>
+            A SwiftUI home for your game, your progress, and your session.
+            Connect a compatible build and pick up your adventure.
+          </p>
+          <dl class="experience-details">
+            <div>
+              <dt>Bring your progress</dt>
+              <dd>
+                Import a complete copy of your save profile. Your original stays
+                where it is.
+              </dd>
+            </div>
+            <div>
+              <dt>See your session</dt>
+              <dd>
+                Inspect local memory use and optional frame timing, with dated
+                recordings.
+              </dd>
+            </div>
+            <div>
+              <dt>Stay in the game</dt>
+              <dd>
+                Change HUD size, detail and placement through Kokiri’s custom
+                in-game menu.
+              </dd>
+            </div>
+          </dl>
+        </div>
+        <figure class="app-figure">
+          <img
+            src="assets/kokiri-home.png"
+            alt="Kokiri's native Mac app showing its Home, Setup, Performance, Shader Library and Settings navigation"
+            width="1600"
+            height="1136"
+            loading="lazy"
+          />
+          <figcaption>The native Kokiri app · November 15, 2026</figcaption>
+        </figure>
+      </section>
+
+      <section
+        class="catalog section"
+        id="catalog"
+        aria-labelledby="catalog-title"
+      >
+        <div class="wrap">
+          <div class="catalog-heading">
+            <img
+              src="assets/kokiri-mark.png"
+              alt=""
+              width="72"
+              height="72"
+              loading="lazy"
+            />
+            <p class="eyebrow green">An open foundation</p>
+          </div>
+          <h2 id="catalog-title">
+            Good discoveries<br /><em>should travel.</em>
+          </h2>
+          <p class="catalog-description">
+            We’re building an open shader and pipeline catalog so compatible
+            projects can share preparation metadata, with your choice to
+            contribute.
+          </p>
+          <ol class="catalog-flow">
+            <li>
+              <span class="flow-label">On your Mac</span>
+              <h3>Discover in play.</h3>
+              <p>Record the pipeline recipes your runtime encounters.</p>
+            </li>
+            <li>
+              <span class="flow-label">Shared metadata</span>
+              <h3>Contribute by choice.</h3>
+              <p>
+                Share validated recipes. Keep game files, saves and shader code
+                local.
+              </p>
+            </li>
+            <li>
+              <span class="flow-label">Compatible builds</span>
+              <h3>Prepare locally.</h3>
+              <p>
+                Use matching metadata to build a cache for your own graphics
+                backend.
+              </p>
+            </li>
+          </ol>
+          <div class="catalog-bottom">
+            <p>
+              <strong>In development.</strong> No live public catalog yet.
+              Compatibility and gameplay validation are ongoing; reduced stutter
+              is a goal, not a measured result.
+            </p>
+            <a
+              class="text-link"
+              href="https://github.com/christianfurr/Kokiri/blob/HEAD/docs/catalog/integration.md"
+              >Explore the protocol <span aria-hidden="true">↗</span></a
+            >
+          </div>
+        </div>
+      </section>
+
+      <section
+        class="start section wrap"
+        id="start"
+        aria-labelledby="start-title"
+      >
+        <div class="start-intro">
+          <p class="eyebrow green">Build it with us</p>
+          <h2 id="start-title">
+            Your next<br /><em>adventure starts here.</em>
+          </h2>
+          <p>
+            Kokiri is open source and in early development. Bring your own game
+            files, a little patience, and help shape what comes next.
+          </p>
+          <a
+            class="button button-green"
+            href="https://github.com/christianfurr/Kokiri#build-from-source"
+            >Build from source <span aria-hidden="true">↗</span></a
+          >
+        </div>
+        <div class="start-details">
+          <dl class="requirements">
+            <div>
+              <dt>Hardware</dt>
+              <dd>Apple silicon Mac</dd>
+            </div>
+            <div>
+              <dt>Software</dt>
+              <dd>macOS 26 + Xcode</dd>
+            </div>
+            <div>
+              <dt>Game</dt>
+              <dd>Switch 2 edition · update 131072</dd>
+            </div>
+          </dl>
+          <details>
+            <summary>Which version of Ocarina of Time?</summary>
+            <p>
+              Your own Nintendo Switch 2 dump of title
+              <code>0400486024DEC000</code>, update <code>131072</code>, with
+              required shared firmware fonts. N64 and Nintendo 3DS ROMs are not
+              supported. No game files are included.
+            </p>
+          </details>
+          <details>
+            <summary>Can I download a finished app?</summary>
+            <p>
+              There’s no stable, notarized release yet. The source guide covers
+              building the native launcher and a private game app. Signed
+              automatic updates are in development; the production feed is not
+              live.
+            </p>
+          </details>
+          <details>
+            <summary>How well does it run?</summary>
+            <p>
+              Whole-game performance is unverified. Severe FPS drops, cold
+              compilation stalls, high memory use and Death Mountain rendering
+              corruption remain open. See the
+              <a
+                href="https://github.com/christianfurr/Kokiri/blob/HEAD/docs/performance.md"
+                >measurement notes</a
+              >
+              for evidence and limits.
+            </p>
+          </details>
+          <details>
+            <summary>How can I help?</summary>
+            <p>
+              Test repeatable routes, report your Mac chip, RAM, build,
+              resolution and cache state, or contribute code and catalog
+              adapters. Start with the
+              <a
+                href="https://github.com/christianfurr/Kokiri/blob/HEAD/CONTRIBUTING.md"
+                >contribution guide</a
+              >. Keep game files and private data out of reports.
+            </p>
+          </details>
+        </div>
+      </section>
+      <section class="follow wrap" aria-labelledby="follow-title">
+        <div>
+          <h3 id="follow-title">Watch it grow.</h3>
+          <p>Follow the work, share a reproducible bug, or lend a hand.</p>
+        </div>
+        <div class="follow-links">
+          <a class="text-link" href="https://github.com/christianfurr/Kokiri"
+            >GitHub <span aria-hidden="true">↗</span></a
+          ><a
+            class="text-link"
+            href="https://github.com/christianfurr/Kokiri/issues"
+            >Report an issue <span aria-hidden="true">↗</span></a
+          >
+        </div>
+      </section>
+    </main>
+    <footer class="footer wrap">
+      <div class="footer-brand">
+        <img src="assets/kokiri-mark.png" alt="" width="34" height="34" /><span
+          >kokiri</span
+        >
+      </div>
+      <p>
+        Built on
+        <a href="https://github.com/ly05010419/MacNativeGames">MacNativeGames</a
+        >. Open source under the
+        <a href="https://github.com/christianfurr/Kokiri/blob/HEAD/LICENSE"
+          >MIT license</a
+        >.<br />Independent community project. Not affiliated with Nintendo.
+      </p>
+      <a
+        href="https://github.com/christianfurr/Kokiri/blob/HEAD/THIRD_PARTY_NOTICES.md"
+        >Credits & notices <span aria-hidden="true">↗</span></a
+      >
+    </footer>
+  </body>
+</html>

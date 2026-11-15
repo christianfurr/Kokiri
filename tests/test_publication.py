@@ -54,6 +54,19 @@ class PublicationTests(unittest.TestCase):
         self.git('add', 'external-link')
         self.assertNotEqual(self.scan('--staged').returncode, 0)
 
+    def test_reviewed_website_image_rejects_replacement_bytes(self):
+        relative = Path('website/assets/kokiri-mark.png')
+        image = self.root / relative
+        image.parent.mkdir(parents=True)
+        shutil.copyfile(Path(__file__).resolve().parents[1] / relative, image)
+        self.git('add', str(relative))
+        self.assertEqual(self.scan('--staged').returncode, 0)
+        image.write_bytes(image.read_bytes() + b'changed')
+        self.git('add', str(relative))
+        result = self.scan('--staged')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('website image changed; review provenance', result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,5 +1,7 @@
 # Decisions
 
+- 2026-11-15: The user approved a forest-to-cream project website with an interactive HUD preview and GitHub Pages hosting. Keep it static, identify illustrative HUD data and earlier gameplay captures, and link to verified source/setup information. The website does not host the catalog API or game files.
+
 - 2026-11-15: The user chose Kokiri and authorized a standalone repository, not a GitHub fork. Preserve MacNativeGames and third-party notices and credit the source lineage.
 - 2026-11-15: Keep native ARM64 execution and Metal as the initial foundation. Preserve game identity separately from product branding; do not rebuild the CPU frontend without evidence.
 - 2026-11-15: Keep game dumps, generated code, shaders, caches, fonts and saves outside the public source repository.
