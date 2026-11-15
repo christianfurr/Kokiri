@@ -3,6 +3,7 @@
 Callers verify file contents first, then supply their manifests and SHA-256 identities.
 The receipt proves coverage of that exact requested work, not all future gameplay.
 """
+import copy
 import re
 
 
@@ -26,7 +27,7 @@ def _difference(requested, completed):
 
 
 def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
-                        artifact_sha256, pipeline_requested, source_commit):
+                        artifact_sha256, pipeline_requested, source_commit, unresolved_inputs=()):
     """Build a fail-closed coverage receipt from already integrity-checked manifests.
 
     ``pipeline_requested`` counts unique C/R/B/T/M lines across every tool input,
@@ -36,6 +37,9 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
     Missing records stay unknown and cannot establish preparation.
     """
     errors = []
+    unresolved_inputs = [unresolved_inputs] if isinstance(unresolved_inputs, str) else list(unresolved_inputs or ())
+    if unresolved_inputs:
+        errors.append('required preparation inputs remain unresolved')
     if mode not in ('full', 'title', 'none'):
         errors.append('unknown shader mode')
     if mode != 'full':
@@ -86,10 +90,35 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
         errors.append('Metal compiler identity lacks required correctness options')
     sources = libraries.get('sources') if isinstance(libraries.get('sources'), dict) else {}
     library_files = libraries.get('files') if isinstance(libraries.get('files'), dict) else {}
-    compiled = sum(sources.get(name) == digest and digest + '.metallib' in library_files
-                   for name, digest in seed_sources.items())
+    def library_covered(name, digest):
+        return isinstance(digest, str) and DIGEST.fullmatch(digest) is not None \
+            and sources.get(name) == digest \
+            and DIGEST.fullmatch(str(library_files.get(digest + '.metallib', ''))) is not None
+
+    compiled = sum(library_covered(name, digest) for name, digest in seed_sources.items())
     if compiled != len(seed_sources):
         errors.append('Metal libraries do not cover every seed variant')
+    observed_sources = {}
+    variant_caches = libraries.get('variant_caches', [])
+    if not isinstance(variant_caches, list):
+        errors.append('invalid observed specialization cache inventory')
+        variant_caches = []
+    for cache in variant_caches:
+        if not isinstance(cache, dict) or not isinstance(cache.get('sources'), dict):
+            errors.append('invalid observed specialization source inventory')
+            continue
+        if not isinstance(cache.get('identity'), dict) or cache['identity'].get('chain') != expected_identity.get('chain'):
+            errors.append('observed specialization cache belongs to another shader chain')
+        for name, digest in cache['sources'].items():
+            if not isinstance(name, str) or not isinstance(digest, str) or not DIGEST.fullmatch(digest) \
+                    or name != digest + '.metal':
+                errors.append('invalid observed specialization source identity: ' + str(name))
+            if name in observed_sources and observed_sources[name] != digest:
+                errors.append('conflicting observed specialization source: ' + str(name))
+            observed_sources[name] = digest
+    observed_compiled = sum(library_covered(name, digest) for name, digest in observed_sources.items())
+    if observed_compiled != len(observed_sources):
+        errors.append('Metal libraries do not cover every observed specialization')
     for field in ARTIFACT_FIELDS:
         if not DIGEST.fullmatch(str(artifact_sha256.get(field, ''))):
             errors.append('missing artifact SHA-256: ' + field)
@@ -134,6 +163,10 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
                        newly_render=counts['render'], newly_compute=counts['compute'],
                        newly_mesh=counts['mesh'], kept=counts['kept'],
                        mesh_requested=mesh_requested, mesh_indexed=mesh_indexed),
+        observed_specializations=dict(requested=len(observed_sources), completed=observed_compiled,
+                                      failed=len(observed_sources) - observed_compiled),
+        compiler_observation=copy.deepcopy(libraries.get('compiler_observation')),
+        unresolved_inputs=copy.deepcopy(unresolved_inputs),
         artifact_sha256=dict(artifact_sha256), errors=errors,
         limitation='Coverage applies to the requested corpus, binding variants and pipeline lists; '
                    'unobserved gameplay variants may still compile.')

@@ -28,10 +28,10 @@ class PreparationReceiptTests(unittest.TestCase):
                               arch='fixture_gpu', listed_mesh=1, mesh_indexed=1)
         self.artifacts = {field: 'f' * 64 for field in receipt.ARTIFACT_FIELDS}
 
-    def make(self, mode='full'):
+    def make(self, mode='full', **kwargs):
         return receipt.preparation_receipt(mode, self.seed, self.libraries, self.pipelines,
                                            expected_identity=self.identity, artifact_sha256=self.artifacts,
-                                           pipeline_requested=6, source_commit='0' * 40)
+                                           pipeline_requested=6, source_commit='0' * 40, **kwargs)
 
     def reject(self, message):
         result = self.make()
@@ -48,6 +48,81 @@ class PreparationReceiptTests(unittest.TestCase):
         self.assertEqual(result['identity']['chain'], self.identity['chain'])
         self.assertEqual(result['artifact_sha256'], self.artifacts)
         self.assertIn('unobserved', result['limitation'])
+
+    def add_observed_cache(self):
+        digest = '4' * 64
+        name = digest + '.metal'
+        self.libraries['variant_caches'] = [dict(identity={'chain': self.identity['chain']},
+                                               sources={name: digest})]
+        self.libraries['sources'][name] = digest
+        self.libraries['files'][digest + '.metallib'] = 'e' * 64
+        return name, digest
+
+    def test_compiler_observation_is_preserved_without_inferred_jit_equivalence(self):
+        observation = dict(qualified=True, backend='metal', path='/private/compiler', version='fixture',
+                           executable_sha256='8' * 64, effective_flags=['-fwrapv'],
+                           effective_target='air64-apple-macosx26.0.0', driver_plan='raw driver trace',
+                           driver_plan_sha256='9' * 64, sdk_mode='compiler-default-resource-headers',
+                           available_macos_sdk={'path': '/private/sdk', 'version': '26.0'})
+        self.libraries['compiler_observation'] = observation
+        result = receipt.require_prepared(self.make())
+        self.assertEqual(result['compiler_observation'], observation)
+        observation['effective_flags'].append('changed after receipt')
+        self.assertEqual(result['compiler_observation']['effective_flags'], ['-fwrapv'])
+
+    def test_compiler_observation_is_optional_for_existing_manifests(self):
+        self.assertIsNone(receipt.require_prepared(self.make())['compiler_observation'])
+
+    def test_observed_specializations_are_counted_separately(self):
+        self.add_observed_cache()
+        result = receipt.require_prepared(self.make())
+        self.assertEqual(result['observed_specializations'], dict(requested=1, completed=1, failed=0))
+        self.assertEqual(result['libraries']['requested'], 3)
+
+    def test_observed_specializations_deduplicate_repeated_caches(self):
+        self.add_observed_cache()
+        self.libraries['variant_caches'].append(copy.deepcopy(self.libraries['variant_caches'][0]))
+        result = receipt.require_prepared(self.make())
+        self.assertEqual(result['observed_specializations']['requested'], 1)
+
+    def test_missing_observed_source_is_fatal(self):
+        name, _ = self.add_observed_cache()
+        self.libraries['sources'].pop(name)
+        result = self.reject('do not cover every observed specialization')
+        self.assertEqual(result['observed_specializations']['failed'], 1)
+
+    def test_changed_observed_source_is_fatal(self):
+        name, _ = self.add_observed_cache()
+        self.libraries['sources'][name] = '5' * 64
+        self.reject('do not cover every observed specialization')
+
+    def test_missing_observed_library_is_fatal(self):
+        _, digest = self.add_observed_cache()
+        self.libraries['files'].pop(digest + '.metallib')
+        self.reject('do not cover every observed specialization')
+
+    def test_observed_specializations_from_v23_are_fatal(self):
+        self.add_observed_cache()
+        self.libraries['variant_caches'][0]['identity']['chain'] = 'oot-native-v23-txd-derivative-order'
+        self.reject('observed specialization cache belongs to another shader chain')
+
+    def test_invalid_observed_hash_filename_is_fatal(self):
+        name, digest = self.add_observed_cache()
+        self.libraries['variant_caches'][0]['sources'] = {'wrong.metal': digest}
+        self.libraries['sources']['wrong.metal'] = digest
+        self.reject('invalid observed specialization source identity')
+
+    def test_conflicting_observed_source_is_fatal(self):
+        name, _ = self.add_observed_cache()
+        self.libraries['variant_caches'].append(dict(identity={'chain': self.identity['chain']},
+                                                   sources={name: '5' * 64}))
+        self.reject('conflicting observed specialization source')
+
+    def test_unresolved_required_inputs_block_preparation(self):
+        result = self.make(unresolved_inputs=['unresolved binding metadata'])
+        self.assertEqual(result['unresolved_inputs'], ['unresolved binding metadata'])
+        with self.assertRaisesRegex(ValueError, 'required preparation inputs remain unresolved'):
+            receipt.require_prepared(result)
 
     def test_none_and_title_cannot_claim_prepared(self):
         for mode in ('none', 'title'):
