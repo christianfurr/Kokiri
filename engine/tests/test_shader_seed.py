@@ -184,6 +184,24 @@ class SeedTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'protected'):
                 seed.guard_publication_paths(alias/'new-seed', cache, root/'safe-stage', root/'safe-old')
 
+    def test_known_logs_are_protected_without_extra_caller_paths(self):
+        for overlap in ('equal', 'ancestor'):
+            with self.subTest(overlap=overlap), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                cache, key, verified, extra, metadata = self.publication_fixture(root)
+                out = root/'published'; out.mkdir(); (out/'prior-seed').write_bytes(b'prior')
+                logs = out if overlap == 'equal' else out/'logs'
+                logs.mkdir(exist_ok=True)
+                (logs/'selected.log').write_bytes(b'preserve selected evidence')
+                with mock.patch.object(seed.shutil, 'rmtree') as remove, mock.patch.object(Path, 'rename') as rename:
+                    with self.assertRaisesRegex(ValueError, 'protected'):
+                        seed.publish_seed(out, cache, {verified}, {key: {'stage': 4}}, metadata,
+                                          started_at=time.time(), logs=logs, jobs=1)
+                    remove.assert_not_called(); rename.assert_not_called()
+                self.assertEqual((logs/'selected.log').read_bytes(), b'preserve selected evidence')
+                self.assertEqual((out/'prior-seed').read_bytes(), b'prior')
+                self.assertTrue((cache/(extra+'_b.metal')).exists())
+
     def test_verification_record_failure_preserves_prior_seed_and_record(self):
         for failure in ('write', 'rename'):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as folder:

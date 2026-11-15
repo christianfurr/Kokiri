@@ -426,7 +426,7 @@ def publish_seed(out, cache, verified, inventory, metadata, *, started_at, shade
     staged_record_tmp = staged_record.with_name(staged_record.name+'.tmp')
     old_record = old.with_name(old.name+'.verified.json')
     record_paths = (verified_record, staged_record, staged_record_tmp, old_record)
-    protected_paths = (*protected_paths, shader_list)
+    protected_paths = (*protected_paths, shader_list, logs)
     guard_publication_paths(out, cache, staging, old, protected_paths, record_paths)
     report = dict(metadata)
     inputs = report['inputs']
