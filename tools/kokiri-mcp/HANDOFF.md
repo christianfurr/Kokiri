@@ -1,5 +1,17 @@
 # Kokiri MCP handoff — 2026-11-15
 
+## Native/MCP continuation
+
+The original freeze record below is historical. The default `server.py` remains observation-only, with28 fixture tests observed in the continuation. The earlier registered snapshot loaded five tools in Codex and returned no sessions; candidate adoption/reload and actual game location/window capture remain pending.
+
+The user subsequently authorized disposable agent development. Separate, unregistered `development_server.py` and the credited `save_workshop/` implement typed test-session controls, transactional save editing and repeatable scenarios. See [the workbench guide](../../docs/development-workbench.md) and its acceptance requirements. New runtime source provides the dedicated isolation entry and human-takeover gates. Actual compilation, packaged-runtime isolation and host adoption must be verified separately; do not advertise old binaries as capable by adding metadata.
+
+The isolated worktree preserves the original shared MCP work and configuration. The historical configuration-preservation comparison remains unprovable without its lost immediate-before snapshot; no stale backup was restored. Integration owns adoption, installation and exclusive runtime test grants.
+
+Observed continuation results: 59 MCP tests passed in 4.831 seconds; 19 native CPU tests and actual `input.c`/`launcher.m` syntax checks passed across bounded exclusive grants. The real SDK flow creates a copied fixture, snapshots/plans/applies/restores a generated save and proves the source fixture unchanged. Native fixtures include intended-failing lease, physical-input, read-only and expiry controls. All owned test groups were verified gone. These results do not establish actual game launch, physical L3+R3, startup or settled menu acceptance. Default host registration was not changed; the development server was not registered.
+
+## Original freeze record
+
 Engineering stopped when the parent relayed the user's request to divide remaining work into new chats. No game is assumed active; the former human PID 91969 was confirmed gone.
 
 ## Completed

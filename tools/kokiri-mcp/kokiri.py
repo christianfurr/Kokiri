@@ -183,7 +183,7 @@ class ProcessReader:
     def game_running(self) -> bool:
         if sys.platform != "darwin":
             return False
-        for name in ("KokiriGame", "OcarinaOfTime"):
+        for name in ("KokiriGame", "OcarinaOfTime", "TOTK", "BotW", "Bananza", "Pokopia", "oot-native.*", "totk-native.*"):
             if subprocess.run(["/usr/bin/pgrep", "-x", name], capture_output=True, timeout=3).returncode == 0:
                 return True
         return False
