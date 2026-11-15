@@ -117,6 +117,7 @@ class RuntimeUpdateTests(unittest.TestCase):
         receipt = dict(schema='kokiri-preparation-receipt-v1', mode='full', prepared=True, errors=[],
                        identity=dict(source_commit=self.record['source_commit'], chain=self.record['shader_chain'],
                                      runtime_sha256=build_input_hash, runtime_hash_scope=runtime.BUILD_HASH_SCOPE,
+                                     seed_runtime_sha256=build_input_hash,
                                      translation_context_sha256='c' * 64,
                                      translator_sha256='d' * 64, gpu_architecture='apple-gpu-fixture'),
                        variants=dict(default=dict(requested=2, completed=2, failed=0),
@@ -141,6 +142,8 @@ class RuntimeUpdateTests(unittest.TestCase):
             payload = path.parent / 'fixture-payload.dat'
             payload.write_bytes(('offline fixture ' + name).encode())
             manifest = dict(files={payload.name: runtime.sha(payload)})
+            if name == 'seed_manifest_sha256':
+                manifest['runtime_sha256'] = build_input_hash
             if name == 'libraries_manifest_sha256':
                 manifest.update(compiler_observation=deepcopy(observation), compiler_context_schema=2,
                                 compiler_context_sha256=receipt['compiler_context_sha256'])
@@ -167,6 +170,55 @@ class RuntimeUpdateTests(unittest.TestCase):
 
     def library_manifest(self, app):
         return runtime.read_json(app / 'Contents/Resources/totk/build/shader-libs/libraries-manifest.json')
+
+    def write_seed_manifest(self, app, receipt, info, manifest):
+        path = app / 'Contents/Resources/totk/build/shader-seed/seed-manifest.json'
+        path.write_text(json.dumps(manifest))
+        receipt['artifact_sha256']['seed_manifest_sha256'] = runtime.sha(path)
+        self.write_receipt(app, receipt, info)
+
+    def test_seed_requests_bind_preseal_runtime_separately_from_final_signed_bytes(self):
+        app, receipt, info = self.app()
+        seed = runtime.read_json(app / 'Contents/Resources/totk/build/shader-seed/seed-manifest.json')
+        build_hash = receipt['artifact_sha256']['runtime_sha256']
+        self.assertEqual(receipt['identity']['seed_runtime_sha256'], build_hash)
+        self.assertEqual(seed['runtime_sha256'], build_hash)
+        with patch.object(runtime.subprocess, 'run'):
+            candidate = runtime.inspect_app(app, self.record)
+        self.assertEqual(candidate['build_runtime_sha256'], build_hash)
+        self.assertNotEqual(candidate['executable_sha256'], build_hash)
+
+    def test_candidate_requires_current_seed_runtime_receipt_proof(self):
+        app, original, original_info = self.app()
+        final_hash = runtime.sha(app / 'Contents/MacOS/KokiriGame')
+        for proof in (None, 'invalid', 'a' * 63, '0' * 64, final_hash):
+            with self.subTest(proof=proof):
+                receipt, info = deepcopy(original), deepcopy(original_info)
+                if proof is None:
+                    receipt['identity'].pop('seed_runtime_sha256')
+                else:
+                    receipt['identity']['seed_runtime_sha256'] = proof
+                self.write_receipt(app, receipt, info)
+                with patch.object(runtime.subprocess, 'run'):
+                    with self.assertRaisesRegex(ValueError, 'Seed requests were not verified by the current build runtime'):
+                        runtime.inspect_app(app, self.record)
+
+    def test_candidate_rejects_other_or_missing_seed_manifest_runtime_after_rebinding_hashes(self):
+        app, original, original_info = self.app()
+        path = app / 'Contents/Resources/totk/build/shader-seed/seed-manifest.json'
+        original_seed = runtime.read_json(path)
+        final_hash = runtime.sha(app / 'Contents/MacOS/KokiriGame')
+        for proof in (None, '0' * 64, final_hash):
+            with self.subTest(seed_manifest_runtime=proof):
+                receipt, info, seed = deepcopy(original), deepcopy(original_info), deepcopy(original_seed)
+                if proof is None:
+                    seed.pop('runtime_sha256')
+                else:
+                    seed['runtime_sha256'] = proof
+                self.write_seed_manifest(app, receipt, info, seed)
+                with patch.object(runtime.subprocess, 'run'):
+                    with self.assertRaisesRegex(ValueError, 'Seed manifest requests belong to another build runtime'):
+                        runtime.inspect_app(app, self.record)
 
     def test_schema2_compiler_receipt_and_library_context_are_qualified(self):
         app, receipt, info = self.app()
@@ -398,6 +450,10 @@ class RuntimeUpdateTests(unittest.TestCase):
 
     def test_historical_schema1_rollback_baseline_remains_recoverable_when_unchanged(self):
         app, receipt, info = self.app()
+        receipt['identity'].pop('seed_runtime_sha256')
+        seed = runtime.read_json(app / 'Contents/Resources/totk/build/shader-seed/seed-manifest.json')
+        seed.pop('runtime_sha256')
+        self.write_seed_manifest(app, receipt, info, seed)
         manifest = self.library_manifest(app)
         for target in (receipt, manifest):
             target['compiler_context_schema'] = 1
