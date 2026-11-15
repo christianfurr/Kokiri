@@ -10,6 +10,11 @@ native keys, an assembled-client download, and actual game adoption remain
 unverified.** No performance improvement is claimed from downloading or
 preparing metadata.
 
+The proposed next steps are recorded separately in
+[production trust activation](production-signing-plan.md) and the
+[offline/mixed runtime contract](offline-runtime-proposal.md). Both require
+integration review; they are not implementation or activation receipts.
+
 The current adapter does **not** prepare task/mesh (`M`) pipelines. The measured
 multi-second cold mesh compilation hitches need a separate mesh preparation
 path. A nonempty precompiled `shader-libs` directory also stays reference-only
