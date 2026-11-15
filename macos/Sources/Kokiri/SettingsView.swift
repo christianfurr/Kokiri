@@ -41,7 +41,12 @@ struct SettingsView: View {
                 Text(model.catalog.status).font(.caption).foregroundStyle(.secondary)
                 if let queued = model.catalog.queued { LabeledContent("Queued metadata records", value: queued.formatted()) }
             }
-            Section("App updates") { UpdateSettings(service: model.updates) }
+            Section("Kokiri launcher updates") { UpdateSettings(service: model.updates) }
+            Section("Game runtime updates") {
+                LabeledContent("Availability", value: "Not configured")
+                Text("Runtime update setup is not available in this build. Launcher updates leave your connected game app, profile and shader caches in place.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("About Kokiri") {
                 Text("KOKIRI \(ProductIdentity.version) (\(ProductIdentity.build))").font(.callout.weight(.medium))
                 Text("Credits: MacNativeGames and its native runtime contributors; Sparkle Project. Dependency notices ship with this app. Game update 131072 is distinct from Kokiri’s product version.").font(.caption).foregroundStyle(.secondary)
@@ -57,8 +62,8 @@ private struct UpdateSettings: View {
         Toggle("Download and install signed updates automatically", isOn: Binding(get: { service.automaticDownloads }, set: { service.automaticDownloads = $0 })).disabled(!service.configured)
         Text(service.status).font(.caption).foregroundStyle(.secondary)
         Text("Automatic checks use a one-hour interval when enabled.").font(.caption).foregroundStyle(.secondary)
-        Text("App updates replace the Kokiri shell. Game apps, build workspaces, profiles and shader caches live outside its bundle.").font(.caption).foregroundStyle(.secondary)
-        Button("Check for Updates…", action: service.check).disabled(!service.canCheck)
+        Text("These updates replace the Kokiri launcher. Game apps, build workspaces, profiles and shader caches live outside its bundle.").font(.caption).foregroundStyle(.secondary)
+        Button("Check for Launcher Updates…", action: service.check).disabled(!service.canCheck)
     }
 }
 
