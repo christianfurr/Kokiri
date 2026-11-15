@@ -53,6 +53,21 @@ print('isolated ready and damaged-tool gates passed')
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
             self.assertIn('isolated ready and damaged-tool gates passed', result.stdout)
 
+    def test_public_staged_rebuild_cli_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);original=root/'Original.app';output=root/'Candidate.app';work=root/'owned-work'
+            with patch.object(build,'update_runtime') as rebuild:
+                build.main(['--rebuild',str(original),'--out',str(output),'--work',str(work),'--jobs','1'])
+            rebuild.assert_called_once_with(original,work,out=output,shared=None,learned_caches=[])
+            self.assertEqual(build.shader_jobs(),1)
+
+    def test_committed_shader_callee_exposes_caller_options(self):
+        result=subprocess.run([sys.executable,'-I',str(ENGINE/'scripts/prepare_ns2_seed.py'),'--help'],
+                              capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        for option in ('--translator','--batch-size','--max-batches','--jobs'):
+            self.assertIn(option,result.stdout)
+
     def test_foreign_application_is_untouched(self):
         with tempfile.TemporaryDirectory() as directory:
             app = Path(directory)/'Foreign.app'
