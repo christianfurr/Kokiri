@@ -50,7 +50,9 @@ test('homepage is static, restricted by CSP, and preserves private service defau
     const html = await response.text();
     assert.match(html, /<title>Kokiri Shader Catalog<\/title>/);
     assert.match(html, /href="\/v1\/protocol"/);
-    assert.match(html, /Private preview/);
+    assert.match(html, /Public preview/);
+    assert.match(html, /Public access\. No account required\./);
+    assert.doesNotMatch(html, /Email sign-in required|Private preview/);
     assert.doesNotMatch(html, /<script\b|<form\b|<iframe\b/i);
   }
   assert.equal(s.address.address, '127.0.0.1');

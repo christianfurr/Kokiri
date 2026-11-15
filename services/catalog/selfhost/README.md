@@ -5,18 +5,27 @@ implements the server's narrow D1 operations with one atomic SQLite transaction
 per batch. There is no web SQL/admin/publication endpoint and no signing key.
 The service shares metadata only; no game files, shaders, caches or saves.
 
-The root GET route serves a static catalog homepage with the current private
+The root GET route serves a static catalog homepage with the current public
 preview status and a link to `/v1/protocol`. It uses a stylesheet-hash CSP and
 loads no scripts, fonts, trackers, or remote assets. The homepage's paused
 contribution status matches the installed default-off ingestion configuration;
 review its copy before opening community ingestion.
 
-For a public homepage with a private API, the planned tunnel exposes only the
-exact root path `^/$` without authentication. The `/v1` Access application must
-protect API children, and the first tunnel rule `^/v1(/.*)?$` must require the
-application's exact Access audience. Everything else returns 404. Enable URL
-normalization and verify encoded/normalized path variants before publishing DNS.
-The Node listener remains local; Access is enforced at the reviewed proxy route.
+Public reads do not require an account. The reviewed tunnel should allow only
+the root homepage, `/v1/protocol`, exact lowercase 64-hex context manifest paths,
+and exact lowercase 64-hex pack paths. The first rule must protect
+`^/v1/contributions(/.*)?$` with the contribution-control Access application's
+exact audience. Ingestion remains disabled in the service independently of that
+Access policy. Unmatched paths return 404. Enable URL normalization and verify
+encoded/normalized write-path variants before activating changes. The Node
+listener remains local; no router port forwarding is required.
+
+Public access does not publish inbox records. The offline publication process
+prepares curated packs and signed manifests; startup and restore validate the
+published data against pinned public keys, and clients independently verify the
+manifest signature and referenced pack hashes. No signing private key or web
+publication endpoint is installed on this host. Production signing, trust-key
+configuration, and admission of the first real catalog remain separate gates.
 
 ## Protections
 

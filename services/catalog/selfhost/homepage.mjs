@@ -33,7 +33,7 @@ export const HOME_HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#edf3ed">
-<meta name="description" content="Kokiri’s shader compatibility catalog. View the protocol and follow the private testing stage.">
+<meta name="description" content="Kokiri’s public shader compatibility catalog. Read the protocol and follow the first verified catalog.">
 <title>Kokiri Shader Catalog</title>
 <style>${style}</style>
 </head>
@@ -42,8 +42,8 @@ export const HOME_HTML = `<!doctype html>
 <header><a class="brand" href="/">Kokiri <span>Shader catalog</span></a><a class="project" href="https://github.com/christianfurr/Kokiri">Project source</a></header>
 <main>
 <section class="intro" aria-labelledby="title">
-<div class="copy"><h1 id="title">A shared catalog for Kokiri.</h1><p class="description">Compatibility metadata for Kokiri’s shader and pipeline work. The catalog is currently in private testing.</p><a class="action" href="/v1/protocol">View protocol</a><span class="sign-in">Email sign-in required</span></div>
-<aside aria-label="Catalog availability"><h2 class="preview">Private preview</h2><p>The service is being verified before the catalog opens for community use.</p><dl><div><dt>Access</dt><dd>Email sign-in</dd></div><div><dt>Contributions</dt><dd>Paused</dd></div><div><dt>Shared content</dt><dd>Metadata only</dd></div></dl></aside>
+<div class="copy"><h1 id="title">A shared catalog for Kokiri.</h1><p class="description">Shader and pipeline compatibility metadata for Kokiri. Read the protocol while the first verified catalog is being prepared.</p><a class="action" href="/v1/protocol">View protocol</a><span class="sign-in">Public access. No account required.</span></div>
+<aside aria-label="Catalog availability"><h2 class="preview">Public preview</h2><p>Anyone can read published catalog metadata. Community contributions remain paused during verification.</p><dl><div><dt>Read access</dt><dd>Public</dd></div><div><dt>Contributions</dt><dd>Paused</dd></div><div><dt>Shared content</dt><dd>Metadata only</dd></div></dl></aside>
 </section>
 <section class="boundary" aria-label="About the catalog"><div><h2>Your files stay local.</h2><p>The catalog is designed for compatibility metadata. Game files, saves, and compiled shaders stay on your device.</p></div><div><h2>Follow the work.</h2><p>Read the <a href="https://github.com/christianfurr/Kokiri/blob/HEAD/docs/catalog/integration.md">catalog documentation</a> for the protocol, verification boundaries, and current development status.</p></div></section>
 </main>
