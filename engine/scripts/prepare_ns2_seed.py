@@ -66,9 +66,9 @@ def run(cmd, log, env=None):
 
 
 def parallel_sha256(paths, jobs=None):
-    """name -> sha256 of every path, hashed on all cores: the seed holds 250,000 files (3 GB); one thread took 8 minutes."""
+    """name -> sha256 with bounded I/O concurrency after translation."""
     import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(jobs or min(16, (os.cpu_count() or 4) * 2)) as pool:
+    with concurrent.futures.ThreadPoolExecutor(min(2, jobs or 2)) as pool:
         return dict(zip((p.name for p in paths), pool.map(sha256, paths)))
 
 
@@ -126,12 +126,14 @@ def seed_unchanged(out, files, inputs):
         return False
 
 
-def seed_files(cache, verified=None):
+def seed_files(cache, verified=None, jobs=2, shader_keys=None):
     """name -> path for the translations of the seed cache: each shader's index and the variants it lists; with verified
     (the variants the seed run checked against its runtime's requests or made), only those, and indexes -> the entries left
     of each shader's index (written into the seed in place of the cache's file)."""
     files, checks, indexes = {}, [], {}
-    for index in sorted(cache.glob('*.variants')):
+    indexes_to_read = (cache.glob('*.variants') if shader_keys is None else
+                       (cache/(key+'.variants') for key in sorted(shader_keys)))
+    for index in sorted(indexes_to_read):
         if not VARIANTS.match(index.name):
             continue
         try:
@@ -163,39 +165,15 @@ def seed_files(cache, verified=None):
         if reflection.get('chain') != CHAIN or reflection.get('key') != name + '_b' or not reflection.get('entry'):
             raise ValueError(f'invalid seed reflection: {refl}')
     import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(min(16, (os.cpu_count() or 4) * 2)) as pool:
+    with concurrent.futures.ThreadPoolExecutor(min(2, jobs)) as pool:
         for _ in pool.map(check, checks):
             pass
     return (files, indexes) if verified is not None else files
 
 
-def corpus_inventory(path):
-    """Check the actual records, not the seed tool's (formerly filtered) queue count."""
-    inventory = {}
-    with path.open('rb') as stream:
-        header = stream.read(12)
-        if len(header) != 12 or header[:8] != CORPUS_MAGIC:
-            raise ValueError('invalid shader corpus')
-        count, = struct.unpack('<I', header[8:])
-        for _ in range(count):
-            st, cn, kn, ln = struct.unpack('<IIIH', stream.read(14))
-            label = stream.read(ln).decode()
-            control, code = stream.read(cn), stream.read(kn)
-            if len(control) != cn or len(code) != kn:
-                raise ValueError('truncated shader corpus')
-            key = shader_key(control, code)
-            if key in inventory:
-                raise ValueError('duplicate shader in corpus: ' + key)
-            inventory[key] = dict(stage=st, source=label)
-        if stream.read(1) or not count:
-            raise ValueError('empty corpus or trailing bytes')
-    return inventory
-
-
-def corpus_subset(path, keys, out):
-    """The corpus records of these shaders, written to out in the same form (a quick build's seed translates only them:
-    --only). Returns how many there are; a key the corpus does not hold is left out, as the full seed would have it."""
-    records = []
+def corpus_records(path):
+    """Yield one original record at a time; never retain the full binary corpus."""
+    seen = set()
     with Path(path).open('rb') as stream:
         header = stream.read(12)
         if len(header) != 12 or header[:8] != CORPUS_MAGIC:
@@ -203,17 +181,153 @@ def corpus_subset(path, keys, out):
         count, = struct.unpack('<I', header[8:])
         for _ in range(count):
             head = stream.read(14)
+            if len(head) != 14:
+                raise ValueError('truncated shader corpus header')
             st, cn, kn, ln = struct.unpack('<IIIH', head)
-            label, control, code = stream.read(ln), stream.read(cn), stream.read(kn)
-            if len(control) != cn or len(code) != kn:
+            label = stream.read(ln)
+            control, code = stream.read(cn), stream.read(kn)
+            if len(label) != ln or len(control) != cn or len(code) != kn:
                 raise ValueError('truncated shader corpus')
-            if shader_key(control, code) in keys:
-                records.append(head + label + control + code)
-    if not records:
-        raise ValueError('none of the --only shaders is in the corpus')
+            key = shader_key(control, code)
+            if key in seen:
+                raise ValueError('duplicate shader in corpus: ' + key)
+            seen.add(key)
+            yield key, st, label.decode(), head + label + control + code
+        if stream.read(1) or not count:
+            raise ValueError('empty corpus or trailing bytes')
+
+
+def corpus_inventory(path):
+    """Check actual records, not the runtime's queue count."""
+    return {key: dict(stage=stage, source=label) for key, stage, label, _ in corpus_records(path)}
+
+
+def corpus_subset(path, keys, out):
+    """The corpus records of these shaders, written to out in the same form (a quick build's seed translates only them:
+    --only). Returns how many there are; a key the corpus does not hold is left out, as the full seed would have it."""
     out = Path(out)
-    out.write_bytes(CORPUS_MAGIC + struct.pack('<I', len(records)) + b''.join(records))
-    return len(records)
+    count = 0
+    with out.open('wb') as target:
+        target.write(CORPUS_MAGIC + struct.pack('<I', 0))
+        for key, _, _, raw in corpus_records(path):
+            if key in keys:
+                target.write(raw)
+                count += 1
+        target.seek(8)
+        target.write(struct.pack('<I', count))
+    if not count:
+        raise ValueError('none of the --only shaders is in the corpus')
+    return count
+
+
+def partition_corpus(path, folder, batch_size=500, shader_list=None):
+    """Bound each process by defaults plus all supplied V rows, conservatively.
+
+    The runtime ignores default-equivalent V rows. Counting those too gives an
+    upper bound without reproducing or inventing its binding answers.
+    """
+    if not 1 <= batch_size <= 500:
+        raise ValueError('batch size must be between 1 and 500 known requests')
+    listed = {}
+    if shader_list:
+        for line in Path(shader_list).read_text().splitlines():
+            if not line.startswith('V\t'):
+                continue
+            fields = line.split('\t')
+            if (len(fields) != 3 or not re.fullmatch('[0-9a-f]{64}', fields[1]) or
+                not isinstance(json.loads(fields[2]), dict)):
+                raise ValueError('invalid recorded shader binding row')
+            listed.setdefault(fields[1], []).append(line)
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=False)
+    chunks, keys, rows, requests, output = [], [], [], 0, None
+
+    def finish():
+        output.seek(8)
+        output.write(struct.pack('<I', len(keys)))
+        output.close()
+        corpus = folder/f'batch-{len(chunks):04d}.bin'
+        partial.replace(corpus)
+        list_path = folder/f'batch-{len(chunks):04d}.tsv' if shader_list else None
+        if list_path:
+            list_path.write_text(''.join(line+'\n' for line in rows))
+        chunks.append(dict(corpus=str(corpus.resolve()), corpus_sha256=sha256(corpus),
+                           list=str(list_path.resolve()) if list_path else None,
+                           list_sha256=sha256(list_path) if list_path else None,
+                           keys=list(keys), known_requests=requests, listed_rows=len(rows)))
+
+    try:
+        for key, _, _, raw in corpus_records(path):
+            weight = 1 + len(listed.get(key, []))
+            if weight > batch_size:
+                raise ValueError(f'shader {key} exceeds the {batch_size}-request batch bound')
+            if keys and requests + weight > batch_size:
+                finish()
+                keys, rows, requests, output = [], [], 0, None
+            if output is None:
+                partial = folder/f'batch-{len(chunks):04d}.partial'
+                output = partial.open('wb')
+                output.write(CORPUS_MAGIC + struct.pack('<I', 0))
+            output.write(raw)
+            keys.append(key)
+            rows.extend(listed.get(key, []))
+            requests += weight
+        if keys:
+            finish()
+    finally:
+        if output is not None and not output.closed:
+            output.close()
+    return chunks
+
+
+def batch_completion(text, keys, verified, has_list=False, returncode=0):
+    """Accept only actual native reports paired with this process's verified set."""
+    if returncode:
+        raise ValueError(f'seed batch exited with {returncode}')
+    done = re.findall(r'\[seed\] done in \d+ s: (\d+) of (\d+) shaders', text)
+    checked = re.findall(r'\[seed\] requests checked: (\d+) variants for this runtime, (\d+) cached ones kept, (\d+) made again', text)
+    listed = re.findall(r"the shader list's bind states: (\d+) of (\d+) translated", text)
+    if len(done) != 1 or len(checked) != 1 or (has_list and len(listed) != 1):
+        raise ValueError('seed batch lacks unambiguous native completion reports')
+    completed, asked = map(int, done[0])
+    variants, kept, made_again = map(int, checked[0])
+    listed_done, listed_asked = map(int, listed[0]) if listed else (0, 0)
+    if completed != len(keys) or asked != len(keys):
+        raise ValueError('incomplete shader seed batch defaults')
+    if listed_done != listed_asked:
+        raise ValueError('incomplete listed shader variants in batch')
+    if (not verified or any(not VARIANT.fullmatch(name) for name in verified) or
+        {name[:64] for name in verified} != set(keys) or variants != len(verified) or kept > variants):
+        raise ValueError('seed batch verified set differs from its requests or corpus')
+    return dict(keys=list(keys), translated_default=completed, corpus_shaders=asked,
+                listed_variants=listed_done, listed_asked=listed_asked,
+                checked_variants=variants, cached_kept=kept, made_again=made_again)
+
+
+def aggregate_batches(inventory, batches, verified):
+    seen = set()
+    fields = ('translated_default', 'corpus_shaders', 'listed_variants', 'listed_asked',
+              'checked_variants', 'cached_kept', 'made_again')
+    total = dict.fromkeys(fields, 0)
+    for batch in batches:
+        keys = set(batch['keys'])
+        if seen & keys or not keys or batch['translated_default'] != len(keys) or batch['corpus_shaders'] != len(keys):
+            raise ValueError('duplicate or incomplete shader batch')
+        if batch['listed_variants'] != batch['listed_asked']:
+            raise ValueError('incomplete listed shader variants in batch')
+        seen.update(keys)
+        for field in fields:
+            total[field] += batch[field]
+    if (seen != set(inventory) or {name[:64] for name in verified} != set(inventory) or
+        total['checked_variants'] != len(verified)):
+        raise ValueError('incomplete shader batches: full corpus and verified coverage required')
+    return total
+
+
+def atomic_json(path, report):
+    partial = path.with_suffix('.partial')
+    partial.write_text(json.dumps(report, indent=2)+'\n')
+    partial.replace(path)
 
 
 def only_keys(path):
@@ -230,8 +344,8 @@ def require_complete(inventory, keys, done, listed=None):
     if missing or not done or int(done.group(1)) != len(inventory) or int(done.group(2)) != len(inventory):
         raise ValueError(f'incomplete shader seed: {len(inventory) - len(missing)}/{len(inventory)} keys; '
                          f'{len(missing)} missing (including skipped stages)')
-    if listed and listed.group(1) != listed.group(2):   # a listed variant only warms up: one that fails is translated at its draw, and fails the same way there
-        print(f'[RED] the shader list: {listed.group(1)} of {listed.group(2)} bind states translated; the rest are left out of the warm-up', flush=True)
+    if listed and listed.group(1) != listed.group(2):
+        raise ValueError(f'incomplete listed shader variants: {listed.group(1)} of {listed.group(2)} bind states translated')
 
 
 def main():
@@ -239,8 +353,13 @@ def main():
     p.add_argument('--version', required=True, help='the game folder name (oot)')
     p.add_argument('--depth-mode', choices=('minus-w', 'zero'), required=True, help="the game's observed NVN device depth mode")
     p.add_argument('--binary', type=Path, required=True, help="the game's binary (build/totk-native-<version>)")
+    p.add_argument('--translator', type=Path, default=Path('build/shader-service/totk_xlate'),
+                   help='source-verified serviced translator installed by engine/build.py')
     p.add_argument('--list', type=Path, help="optional recorded bind states; OOT always extracts all resource shaders")
-    p.add_argument('--jobs', type=int, default=4, help='bounded extraction/translation concurrency')
+    p.add_argument('--jobs', type=int, default=2, help='bounded extraction/translation concurrency')
+    p.add_argument('--batch-size', type=int, default=500,
+                   help='maximum known default plus recorded binding requests per process (1-500)')
+    p.add_argument('--max-batches', type=int, help='bounded pilot; incomplete coverage exits 2 without publishing a seed')
     p.add_argument('--output', type=Path, help='default build/shader-seed/<version>')
     p.add_argument('--logs', type=Path, default=Path('logs'))
     p.add_argument('--only', type=Path, help='translate only these shaders (one 64-hex key per line): a quick build\'s '
@@ -248,6 +367,10 @@ def main():
     a = p.parse_args()
     if not 1 <= a.jobs <= 32:
         p.error('--jobs must be between 1 and 32')
+    if not 1 <= a.batch_size <= 500:
+        p.error('--batch-size must be between 1 and 500 known requests')
+    if a.max_batches is not None and a.max_batches < 1:
+        p.error('--max-batches must be positive')
     a.binary = a.binary.resolve()
     v = a.version
     out = a.output or Path(f'build/shader-seed/{v}')
@@ -277,7 +400,9 @@ def main():
             seed_list = corpus.with_name(f'{v}-only-list.tsv')
             ShaderList.load(a.list).only(only).save(seed_list)
 
-    prebuilt = Path('prebuilt/macos-arm64/totk_xlate')
+    prebuilt = a.translator.resolve()
+    if not prebuilt.is_file():
+        raise ValueError('missing source-built shader translator: ' + str(prebuilt))
     context = translation_context(prebuilt, a.depth_mode)
     cache = cache / context
     cache.mkdir(parents=True, exist_ok=True)
@@ -291,41 +416,74 @@ def main():
         # program overwritten in place is then killed at launch (SIGKILL, Code Signature Invalid; 2026-11-03).
         service.unlink(missing_ok=True)
         shutil.copy2(prebuilt, service)
-    log = a.logs / f'ns2-seed-{v}.log'
     sys.path.insert(0, str(Path(__file__).resolve().parent / 'dev'))
     from game_slot import GameSlot
     os.environ.setdefault('TOTK_GAME_SLOT_DIR', str(Path.home() / 'Library/Application Support/MacNativeGames/TOTK/game-slot'))
     env = {k: value for k, value in os.environ.items() if k not in ('TOTK_SHADER_XLATE', 'TOTK_SHADER_DEBUGMODE')}
-    verified_list = (cache / 'verified.txt').resolve()   # what this run checked or made (runtime_shader_seed)
-    verified_list.unlink(missing_ok=True)
     env.update(TOTK_SHADER_CACHE=str(cache.resolve()), TOTK_SEED_DEPTH_MODE=a.depth_mode,
                TOTK_NATIVE_DIR=str(native.resolve()), TOTK_SHADER_SEED='off', TOTK_RT_BG_WORKERS=str(a.jobs),
                TOTK_SHADER_SERVICE='native', TOTK_XLATE_SPIRV_CROSS='inproc',
-               TOTK_SEED_VERIFY='1', TOTK_SEED_VERIFIED_OUT=str(verified_list))
-    with GameSlot(owner='build', purpose=f'{v}: complete offline shader translation', expect_seconds=1200) as slot:
-        with log.open('w') as output:
-            result = slot.popen([str(a.binary), f'rewritten/{v}', 'seed-shaders', str(corpus),
-                                 *([str(seed_list)] if seed_list else [])], env=env, stdout=output, stderr=subprocess.STDOUT).wait()
-        if result:
-            raise SystemExit(f'seed-shaders failed ({result}); see {log}')
-    text = log.read_text(errors='replace')
-    done = re.search(r'\[seed\] done in \d+ s: (\d+) of (\d+) shaders', text)
-    listed = re.search(r"the shader list's bind states: (\d+) of (\d+) translated", text)
-    if not done:
-        raise SystemExit(f'the seed did not finish; see {log}')
-
-    if not verified_list.is_file():
-        raise SystemExit(f'the seed run wrote no {verified_list.name}; see {log}')
-    checked = re.search(r'\[seed\] requests checked: (\d+) variants for this runtime, (\d+) cached ones kept, (\d+) made again', text)
-    if checked:
-        print(f'translations: {checked.group(2)} kept for this runtime\'s requests, {checked.group(3)} made again '
-              f'(another request), {int(checked.group(1)) - int(checked.group(2))} made in all', flush=True)
-    files, indexes = seed_files(cache, set(verified_list.read_text().split()))
-    keys = sorted(n[:-len('.variants')] for n in files if n.endswith('.variants'))
+               TOTK_SEED_VERIFY='1')
+    batch_dir = a.logs/f'ns2-seed-{v}-batches-{time.time_ns()}'
+    batches = partition_corpus(corpus, batch_dir, a.batch_size, seed_list)
     inventory = corpus_inventory(corpus)
+    progress_path = batch_dir/'progress.json'
+    progress = dict(schema=1, status='incomplete', corpus_sha256=sha256(corpus),
+                    runtime_sha256=sha256(a.binary), translator_sha256=sha256(prebuilt),
+                    translation_context_sha256=context, batch_size=a.batch_size, jobs=a.jobs,
+                    planned_batches=len(batches), corpus_shaders=len(inventory),
+                    known_requests=sum(batch['known_requests'] for batch in batches), batches=[])
+    atomic_json(progress_path, progress)
+    print(f"seed batches: {len(batches)}, at most {a.batch_size} known requests per process; progress {progress_path}", flush=True)
+    verified = set()
+    with GameSlot(owner='build', purpose=f'{v}: complete offline shader translation', expect_seconds=1200) as slot:
+        for number, batch in enumerate(batches):
+            if a.max_batches is not None and number >= a.max_batches:
+                break
+            log = batch_dir/f'batch-{number:04d}.log'
+            verified_list = (batch_dir/f'batch-{number:04d}-verified.txt').resolve()
+            batch_env = dict(env, TOTK_SEED_VERIFIED_OUT=str(verified_list))
+            try:
+                with log.open('w') as output:
+                    result = slot.popen([str(a.binary), f'rewritten/{v}', 'seed-shaders', batch['corpus'],
+                                         *([batch['list']] if batch['list'] else [])], env=batch_env,
+                                        stdout=output, stderr=subprocess.STDOUT).wait()
+                checked = set(verified_list.read_text().split()) if verified_list.is_file() else set()
+                report = batch_completion(log.read_text(errors='replace'), batch['keys'], checked,
+                                          bool(batch['list']), result)
+                if report['corpus_shaders']+report['listed_asked'] > batch['known_requests']:
+                    raise ValueError('native batch requested more than the planned bound')
+                outputs, _ = seed_files(cache, checked, a.jobs, batch['keys'])
+                if {name[:-len('.variants')] for name in outputs if name.endswith('.variants')} != set(batch['keys']):
+                    raise ValueError('verified batch cache outputs are incomplete')
+                if {name[:-len('_b.metal')] for name in outputs if name.endswith('_b.metal')} != checked:
+                    raise ValueError('verified batch variants are missing cached outputs')
+                report.update(corpus_sha256=batch['corpus_sha256'], list_sha256=batch['list_sha256'],
+                              known_requests=batch['known_requests'], log=str(log.resolve()),
+                              log_sha256=sha256(log), verified_sha256=sha256(verified_list),
+                              output_sha256=parallel_sha256(list(outputs.values()), a.jobs))
+                verified.update(checked)
+                progress['batches'].append(report)
+                atomic_json(progress_path, progress)
+                print(f"seed batch {number+1}/{len(batches)}: {report['translated_default']} defaults, "
+                      f"{report['listed_variants']}/{report['listed_asked']} listed; "
+                      f"{report['cached_kept']} verified cached variants", flush=True)
+            except (OSError, ValueError) as error:
+                progress.update(status='failed', failed_batch=number, error=str(error), log=str(log.resolve()))
+                atomic_json(progress_path, progress)
+                raise
+    if len(progress['batches']) != len(batches):
+        print(f'partial seed pilot: {len(progress["batches"])}/{len(batches)} batches checked; no full seed published; {progress_path}', flush=True)
+        raise SystemExit(2)
+    totals = aggregate_batches(inventory, progress['batches'], verified)
+    progress.update(status='complete', totals=totals)
+    atomic_json(progress_path, progress)
+    files, indexes = seed_files(cache, verified, a.jobs)
+    keys = sorted(n[:-len('.variants')] for n in files if n.endswith('.variants'))
     missing = {k: inventory[k] for k in sorted(inventory.keys() - set(keys))}
     (a.logs / f'ns2-seed-{v}-missing.json').write_text(json.dumps(missing, indent=2) + '\n')
-    require_complete(inventory, keys, done, listed)
+    if missing:
+        raise ValueError('verified full seed has missing cached shader keys')
     shaders = sum(n.endswith('_b.metal') for n in files)
     here = Path(__file__).resolve().parent
     inputs = dict(chain=CHAIN, version=v, source_romfs_sha256=romfs_sha, translation_context_sha256=context,
@@ -373,10 +531,11 @@ def main():
                   only=len(only) if only else None,   # a quick seed: only these shaders (the rest translated at first use)
                   stages={str(st): sum(x['stage'] == st for x in inventory.values()) for st in range(6)},
                   preparation_sha256=sha256(Path(__file__).resolve()), shaders=shaders,
-                  corpus_shaders=int(done.group(2)), translated_default=int(done.group(1)),
-                  listed_variants=int(listed.group(1)) if listed else 0, listed_asked=int(listed.group(2)) if listed else 0,
+                  corpus_shaders=totals['corpus_shaders'], translated_default=totals['translated_default'],
+                  listed_variants=totals['listed_variants'], listed_asked=totals['listed_asked'],
+                  batch_receipts=progress,
                   seconds=round(time.time() - t0, 1), inputs=inputs, files={})
-    report['files'], read = publish_digests(sorted(staging.iterdir()), out, parallel_sha256)
+    report['files'], read = publish_digests(sorted(staging.iterdir()), out, lambda paths: parallel_sha256(paths, a.jobs))
     print(f'seed files: {len(report["files"])}, {read} read again (the rest kept the digest of the last seed)', flush=True)
     (staging / 'seed-manifest.json').write_text(json.dumps(report, indent=2) + '\n')
     # Publish first; deleting tens of thousands of old files on an external APFS volume takes minutes. The old seed
