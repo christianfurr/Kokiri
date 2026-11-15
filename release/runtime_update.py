@@ -25,15 +25,22 @@ import time
 import urllib.parse
 import urllib.request
 import zipfile
+import runtime_inputs
 
 ROOT = Path(__file__).resolve().parents[1]
 TRUSTED_COMPILER_HELPER = ROOT / 'engine/scripts/metal_toolchain.py'
+TRUSTED_PREPARATION_HELPER = ROOT / 'engine/scripts/preparation_receipt.py'
 MAX_ARCHIVE = 128 << 20
 MAX_EXPANDED = 256 << 20
 RECEIPT = 'Contents/Resources/totk/build/game-data/oot/preparation-receipt.json'
 PRODUCT = 'com.christianfurr.kokiri.runtime'
 BUILD_HASH_SCOPE = 'pre-seal build executable; final signed bytes require an external package fingerprint'
 SUPPORTED_COMPILER_FLAGS = {'-mmacosx-version-min=26.0', '-fmetal-math-mode=safe', '-fpreserve-invariance', '-fwrapv'}
+ARCHIVE_VERIFICATION_FIELDS = (
+    'verify_only', 'verification_process_fresh', 'verification_runtime_sha256', 'native_exit_code',
+    'library_jit_attempts', 'archive_misses', 'archive_writes', 'verified_rows', 'archive_files_opened',
+    'libraries_manifest_sha256', 'compiler_context_sha256', 'compiler_context_schema',
+    'archive_snapshot_before_sha256', 'archive_snapshot_after_sha256')
 DIGEST = re.compile(r'[0-9a-f]{64}')
 COMMIT = re.compile(r'[0-9a-f]{40}')
 
@@ -332,6 +339,40 @@ def verify_compiler_context(receipt, libraries):
     return context
 
 
+def load_trusted_preparation_validator():
+    helper = TRUSTED_PREPARATION_HELPER
+    require(helper.is_file() and not helper.is_symlink(),
+            'Trusted final archive validator unavailable; integrate the final preparation tooling')
+    spec = importlib.util.spec_from_file_location('kokiri_trusted_preparation_validator', helper)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    validator = getattr(module, 'archive_verification_errors', None)
+    require(callable(validator), 'Trusted preparation validator lacks final archive support')
+    return validator
+
+
+def verify_archive_verification(receipt, report):
+    require(isinstance(report, dict), 'Final archive report must be a JSON object')
+    counts, identity, artifacts = receipt['pipelines'], receipt['identity'], receipt['artifact_sha256']
+    require(type(report.get('requested')) is int and report['requested'] == counts['requested']
+            and type(report.get('completed')) is int and report['completed'] == counts['completed']
+            and report.get('chain') == identity['chain'] and report.get('arch') == identity['gpu_architecture']
+            and report.get('runtime_sha256') == artifacts['runtime_sha256'],
+            'Final archive report differs from the prepared runtime or requested pipeline set')
+    validator = load_trusted_preparation_validator()
+    try:
+        errors = validator(report, requested=counts['requested'],
+                           libraries_manifest_sha256=artifacts['libraries_manifest_sha256'],
+                           compiler_context_sha256=receipt['compiler_context_sha256'],
+                           runtime_sha256=artifacts['runtime_sha256'])
+    except (ValueError, TypeError, AttributeError, KeyError) as error:
+        raise ValueError('Invalid final archive verification evidence') from error
+    require(isinstance(errors, list) and not errors, 'Final archive verification did not establish read-only preparation')
+    expected = {field: report.get(field) for field in ARCHIVE_VERIFICATION_FIELDS}
+    require(receipt.get('archive_verification') == expected, 'Receipt archive proof differs from the sealed pipeline report')
+    return expected
+
+
 def verify_preparation_artifacts(app, receipt, *, qualify_compiler=False):
     arch = receipt['identity'].get('gpu_architecture')
     require(isinstance(arch, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', arch), 'Invalid GPU archive identity')
@@ -341,6 +382,10 @@ def verify_preparation_artifacts(app, receipt, *, qualify_compiler=False):
                  pipeline_manifest_sha256=build / 'pipelines/compute-manifest.json',
                  pipeline_index_sha256=build / 'pipelines' / ('pipelines-' + arch + '.tsv'))
     expected = receipt['artifact_sha256']
+    if qualify_compiler:
+        artifact_paths = {name: path.relative_to(app).as_posix() for name, path in paths.items()}
+        artifact_paths['runtime_sha256'] = 'Contents/MacOS/KokiriGame'
+        require(receipt.get('artifact_paths') == artifact_paths, 'Preparation artifact paths differ from the actual bundle')
     for name, path in paths.items():
         require(path.resolve(strict=True).is_relative_to(app)
                 and DIGEST.fullmatch(str(expected.get(name, ''))) and sha(path) == expected[name],
@@ -354,6 +399,8 @@ def verify_preparation_artifacts(app, receipt, *, qualify_compiler=False):
                     'Seed manifest requests belong to another build runtime')
         if name == 'libraries_manifest_sha256' and qualify_compiler:
             verify_compiler_context(receipt, manifest)
+        if name == 'pipeline_manifest_sha256' and qualify_compiler:
+            verify_archive_verification(receipt, manifest)
         files = manifest.get('files')
         require(isinstance(files, dict) and files, 'Preparation artifact lacks payload hashes')
         for relative, digest in files.items():
@@ -468,11 +515,14 @@ def verify_package_output(work, candidate):
     return sha(path)
 
 
-def stage(root, manifest, signature, public_key, archive, current_app, work, python):
+def stage(root, manifest, signature, public_key, archive, current_app, work, python,
+          *, shader_list=None, learned_caches=()):
     validate_store_location(root, work, current_app)
     current = state(root)
     record = verify_manifest(manifest, signature, public_key, current['highest_version'])
     load_trusted_compiler_validator()
+    load_trusted_preparation_validator()
+    original_inputs = runtime_inputs.capture_inputs(work, shader_list, learned_caches, record['shader_chain'])
     pin_key(root, public_key)
     game_closed()
     baseline = inspect_app(current_app)
@@ -492,14 +542,26 @@ def stage(root, manifest, signature, public_key, archive, current_app, work, pyt
     # Source identity is the signed manifest, not a fabricated local git commit.
     atomic_json(source / 'kokiri-source-release.json', record)
     clone_work(work, version / 'work')
+    staged_inputs = runtime_inputs.verify_cloned_inputs(original_inputs, version / 'work')
+    runtime_inputs.verify_unchanged(original_inputs)
+    input_provenance = dict(schema='kokiri-runtime-input-provenance-v1', original=original_inputs, staged=staged_inputs)
+    atomic_json(version / 'input-provenance.json', input_provenance)
+    selected_list, selected_caches = runtime_inputs.remap_inputs(original_inputs, version / 'work')
     atomic_json(version / 'transaction.json', dict(phase='building', version=record['version'], baseline=baseline))
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(('OOT_', 'TOTK_', 'DYLD_', 'PYTHON', 'DM_'))}
     environment.update(OOT_SHADERS='full', KOKIRI_BUILD_JOBS='2')
     app = version / 'Kokiri Game.app'
+    build_arguments = [python, '-I', source / 'engine/build.py', '--rebuild', Path(current_app).resolve(),
+                       '--out', app, '--work', version / 'work', '--jobs', '2']
+    if selected_list is not None:
+        build_arguments += ['--shader-list', selected_list]
+    for cache in selected_caches:
+        build_arguments += ['--learned-cache', cache]
     with (version / 'build.log').open('xb') as log:
-        build_candidate([python, '-I', source / 'engine/build.py', '--rebuild', Path(current_app).resolve(),
-                         '--out', app, '--work', version / 'work', '--jobs', '2'], log, environment)
+        build_candidate(build_arguments, log, environment)
+    runtime_inputs.verify_unchanged(original_inputs)
+    runtime_inputs.verify_unchanged(staged_inputs)
     require(not app.is_symlink() and app.resolve(strict=True) == app.absolute(),
             'Candidate app must be owned by its version directory')
     candidate = inspect_app(app, record)
@@ -510,7 +572,8 @@ def stage(root, manifest, signature, public_key, archive, current_app, work, pyt
                 'Candidate game-data library escapes its versioned workspace')
     atomic_json(version / 'transaction.json', dict(phase='prepared', version=record['version'],
                                                  candidate=candidate, baseline=baseline,
-                                                 package_output_sha256=package_output_sha256))
+                                                 package_output_sha256=package_output_sha256,
+                                                 input_provenance_sha256=sha(version / 'input-provenance.json')))
     return dict(status='staged', candidate=candidate, activated=False, game_launched=False)
 
 
@@ -532,6 +595,13 @@ def activate(root, version, public_key):
     record = verify_manifest(folder / 'manifest.json', folder / 'manifest.sig', public_key, current['highest_version'])
     pin_key(root, public_key)
     require(record['version'] == version, 'Candidate version mismatch')
+    provenance_path = folder / 'input-provenance.json'
+    require(DIGEST.fullmatch(str(transaction.get('input_provenance_sha256', '')))
+            and sha(provenance_path) == transaction['input_provenance_sha256'], 'Preparation input provenance changed')
+    provenance = read_json(provenance_path, limit=32 << 20)
+    require(provenance.get('schema') == 'kokiri-runtime-input-provenance-v1', 'Invalid preparation input provenance')
+    runtime_inputs.verify_unchanged(provenance['original'])
+    runtime_inputs.verify_unchanged(provenance['staged'])
     app = folder / 'Kokiri Game.app'
     require(not app.is_symlink() and app.resolve() == app.absolute(),
             'Candidate app must stay inside its version directory')
@@ -578,6 +648,9 @@ def main():
     stage_parser.add_argument('--current-app', required=True, type=Path)
     stage_parser.add_argument('--work', required=True, type=Path)
     stage_parser.add_argument('--python', required=True, type=Path)
+    stage_parser.add_argument('--shader-list', type=Path, help='explicit merged metadata in WORK/preparation-inputs/RUN')
+    stage_parser.add_argument('--learned-cache', type=Path, action='append', default=[],
+                              help='complete same-chain cache within the selected owned input run (repeatable)')
     activation = sub.add_parser('activate')
     activation.add_argument('--version', required=True, type=int)
     activation.add_argument('--public-key', required=True)
@@ -599,7 +672,8 @@ def main():
                         record = verify_manifest(manifest, signature, args.public_key, state(root)['highest_version'])
                         download(record['archive_url'], archive, record['archive_bytes'])
                     require(manifest and signature and archive, 'Local delivery requires manifest, signature and archive')
-                    result = stage(root, manifest, signature, args.public_key, archive, args.current_app, args.work, args.python)
+                    result = stage(root, manifest, signature, args.public_key, archive, args.current_app, args.work, args.python,
+                                   shader_list=args.shader_list, learned_caches=args.learned_cache)
             elif args.action == 'activate':
                 result = activate(root, args.version, args.public_key)
             elif args.action == 'rollback':

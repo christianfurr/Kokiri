@@ -84,12 +84,24 @@ for name,folder,filename in [('seed_manifest_sha256','shader-seed','seed-manifes
  if folder=='shader-seed':metadata['runtime_sha256']=artifacts['runtime_sha256']
  manifest.write_text(json.dumps(metadata));artifacts[name]=sha(manifest)
 index=build/'pipelines/pipelines-fixture.tsv';index.write_text('synthetic-index\n');artifacts['pipeline_index_sha256']=sha(index)
+report_path=build/'pipelines/compute-manifest.json';report=json.loads(report_path.read_text())
+report.update(render=1,compute=0,mesh=0,kept=0,failed=0,write_failed=0,requested=1,completed=1,
+ arch='fixture',chain=record['shader_chain'],runtime_sha256=artifacts['runtime_sha256'],
+ verify_only=True,verification_process_fresh=True,verification_runtime_sha256=artifacts['runtime_sha256'],native_exit_code=0,
+ library_jit_attempts=0,archive_misses=0,archive_writes=0,verified_rows=1,archive_files_opened=1,
+ libraries_manifest_sha256=artifacts['libraries_manifest_sha256'],compiler_context_sha256=compiler_context,compiler_context_schema=2,
+ archive_snapshot_before_sha256='e'*64,archive_snapshot_after_sha256='e'*64)
+report_path.write_text(json.dumps(report));artifacts['pipeline_manifest_sha256']=sha(report_path)
 counts={'requested':1,'completed':1,'failed':0}
 receipt={'schema':'kokiri-preparation-receipt-v1','mode':'full','prepared':True,'errors':[],
  'identity':{'source_commit':record['source_commit'],'chain':record['shader_chain'],'runtime_sha256':sha(executable),'seed_runtime_sha256':sha(executable),'runtime_hash_scope':'pre-seal build executable; final signed bytes require an external package fingerprint','translation_context_sha256':'c'*64,'translator_sha256':'d'*64,'gpu_architecture':'fixture'},
  'variants':{'default':counts,'listed':{'requested':0,'completed':0,'failed':0},'unique_completed':1},
  'libraries':counts,'pipelines':dict(counts,write_failed=0,unaccounted=0),'artifact_sha256':artifacts,
  'compiler_context_schema':2,'compiler_context_sha256':compiler_context,'compiler_observation':observation}
+fields=('verify_only','verification_process_fresh','verification_runtime_sha256','native_exit_code','library_jit_attempts','archive_misses','archive_writes','verified_rows','archive_files_opened','libraries_manifest_sha256','compiler_context_sha256','compiler_context_schema','archive_snapshot_before_sha256','archive_snapshot_after_sha256')
+receipt['archive_verification']={field:report[field] for field in fields}
+receipt['artifact_paths']={name:'Contents/Resources/totk/build/'+relative for name,relative in {'seed_manifest_sha256':'shader-seed/seed-manifest.json','libraries_manifest_sha256':'shader-libs/libraries-manifest.json','pipeline_manifest_sha256':'pipelines/compute-manifest.json','pipeline_index_sha256':'pipelines/pipelines-fixture.tsv'}.items()}
+receipt['artifact_paths']['runtime_sha256']='Contents/MacOS/KokiriGame'
 path=build/'game-data/oot/preparation-receipt.json';path.parent.mkdir(parents=True);path.write_text(json.dumps(receipt))
 info_path=app/'Contents/Info.plist';info=plistlib.loads(info_path.read_bytes());info.update(KokiriPrepared=True,KokiriShaders='full',KokiriSourceCommit=record['source_commit'],KokiriPreparationReceiptSHA256=sha(path),KokiriBuildRuntimeSHA256=artifacts['runtime_sha256']);info_path.write_bytes(plistlib.dumps(info))
 subprocess.run(['/usr/bin/codesign','--force','--sign','-',str(app)],check=True)
@@ -108,6 +120,7 @@ def compiler_observation_fixture():
         path=driver, executable_sha256='8' * 64,
         effective_flags=['-mmacosx-version-min=26.0', '-fmetal-math-mode=safe', '-fpreserve-invariance', '-fwrapv'],
         effective_target='air64-apple-macosx26.0.0', sdk_mode='compiler-default-resource-headers',
+        working_directory=base,
         loader_environment_policy='reject-nonempty-DYLD',
         resource_headers=dict(path=base + '/headers', content_sha256='7' * 64, files=1, bytes=1),
         host_identity=dict(os_build='synthetic-fixture-os', machine='arm64', kernel_release='synthetic-fixture-kernel'),
@@ -223,6 +236,7 @@ def selftest(output):
     output = Path(output).resolve()
     runtime.require(not output.exists() and not output.is_relative_to(runtime.ROOT), 'Use a fresh external private test folder')
     runtime.load_trusted_compiler_validator()
+    runtime.load_trusted_preparation_validator()
     runtime.game_closed()
     output.mkdir(mode=0o700)
     command_journal = output / 'commands.jsonl'
@@ -280,7 +294,7 @@ def selftest(output):
             runtime.require((work/'preserved-cache.txt').read_text()=='preserved-fixture\n','Original workspace changed')
             runtime.require(runtime.state(store)['highest_version']==1,'Rollback lowered replay protection')
         result = dict(schema=1, tested_at_utc=datetime.now(timezone.utc).isoformat(),
-                      fixture_only=True, synthetic_compiler_observation=True,
+                      fixture_only=True, synthetic_compiler_observation=True, synthetic_archive_verification=True,
                       game_assets_used=False, game_launched=False, production_ready=False,
                       source_manifest_sha256=runtime.sha(manifest), source_archive_sha256=runtime.sha(archive),
                       baseline=original, candidate=staged['candidate'],

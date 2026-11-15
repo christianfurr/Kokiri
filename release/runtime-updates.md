@@ -94,8 +94,22 @@ environment policy; older policyless schema-2 proofs are rejected.
 The supported driver policy is exactly the macOS 26.0 deployment, safe math,
 preserve-invariance and wrapv options. Extra or duplicate driver flags and
 recorded frontend options that disable those correctness guarantees are refused.
+The qualified observation also binds the actual absolute canonical compiler
+working directory; relocating the build workspace cannot silently change it.
 Previously retained, unchanged snapshots can still be selected for explicit
 recovery; that does not promote their old preparation evidence.
+
+New promotion also validates the actual sealed `compute-manifest.json` through
+the trusted engine's `archive_verification_errors` function. It requires fresh
+read-only native verification, zero translated-library JIT attempts, zero
+archive misses/writes, every requested row verified, at least one archive opened,
+successful native exit and unchanged before/after archive snapshots. The native
+report must identify the actual current library manifest, qualified compiler
+context and raw runtime. The receipt's 14-field archive projection and five
+artifact paths must match the sealed files exactly. `successful_render`,
+`successful_compute` and `successful_mesh` include archive hits; they are not
+counts of newly compiled pipelines. The JIT counter excludes embedded support
+shaders and OS/driver code generation.
 
 `receipt.identity.runtime_sha256` and `artifact_sha256.runtime_sha256` identify
 the pre-seal build executable used for pipeline preparation, as explicitly
@@ -163,6 +177,55 @@ python3 -B release/runtime_update.py --store /absolute/private/RuntimeVersions s
 python3 -B release/runtime_update.py --store /absolute/private/RuntimeVersions relaunch
 python3 -B release/runtime_update.py --store /absolute/private/RuntimeVersions rollback
 ```
+
+For a game rehearsal, use the Integration-approved isolated development launcher
+for the exact selected app and retained baseline. The generic `relaunch` command
+uses ordinary player-data defaults; it does not create a disposable profile,
+cache or explicit PSO set. Close the rehearsal session normally under its actual
+ownership rules before changing version selection.
+
+## Explicit learned inputs
+
+The updater accepts the producer's existing `--shader-list FILE` and repeatable
+`--learned-cache DIR` inputs. A selected cache requires an explicit merged list;
+the updater does not discover legacy caches or merge/rename metadata itself.
+Integration must authorize creation of independent owned snapshots before
+staging. Place the list, separate explicit/profile PSO files, complete cache and
+any merge-recovery provenance together below `WORK/preparation-inputs/RUN`:
+
+```text
+WORK/preparation-inputs/RUN/shader-list.tsv
+WORK/preparation-inputs/RUN/pso-user.tsv
+WORK/preparation-inputs/RUN/profile-pso-user.tsv
+WORK/preparation-inputs/RUN/observed-cache/
+```
+
+Pass the list and cache paths alongside `stage`'s other arguments. The client
+inventories that entire selected run, including separate PSOs, unrecognized
+cache files and empty directories, then verifies the independent work clone
+has identical contents and different file identities. Only cloned input paths
+reach the builder. Symbolic links, hardlinks, changed inputs and wrong shader
+chains are refused. Private `input-provenance.json` records file hashes, byte
+counts, source paths and metadata/stat identities; the original and cloned
+inputs must remain unchanged through activation. Retain these active snapshots
+until the rehearsal completes; the client never deletes them.
+
+Metadata row totals are not compiled work or proof of semantic inclusion. The
+producer must independently validate the merged normalized row set. Unsupported
+raw records remain in the complete cache and separate PSOs even when they are
+not prewarm requests. Cache identities without translator/compiler fields stay
+intact; the updater never invents those identities. The producer validates and
+imports only compatible patched MSL/metadata, rather than adopting cached base
+binaries. Current-runtime request proof and qualified library/archive evidence
+remain mandatory.
+
+Staging always rebuilds a new runtime and signs a new app. With an incomplete
+workspace, first establish the producer's qualified baseline through its
+explicit full-build recipe; `--rebuild` keeps its compatibility refusal. The
+subsequent update's own staged output is the candidate to test. Its prior
+baseline supplies rollback; an earlier producer candidate's fingerprint cannot
+be substituted for the new output. Freeze the final native source before request
+proof, then record the separately sealed final-byte identity.
 
 All commands return one JSON object. Failure exits nonzero with
 `status: refused`; private compiler logs stay in the version folder. A staged

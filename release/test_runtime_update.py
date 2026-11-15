@@ -78,6 +78,7 @@ class RuntimeUpdateTests(unittest.TestCase):
             effective_flags=['-mmacosx-version-min=26.0', '-fmetal-math-mode=safe',
                              '-fpreserve-invariance', '-fwrapv'],
             effective_target='air64-apple-macosx26.0.0', sdk_mode='compiler-default-resource-headers',
+            working_directory='/private/fixture',
             resource_headers=dict(content_sha256='7' * 64),
             host_identity=dict(os_build='offline-build', machine='arm64', kernel_release='offline-kernel'),
             tool_components=[
@@ -152,6 +153,24 @@ class RuntimeUpdateTests(unittest.TestCase):
         index = build / 'pipelines/pipelines-apple-gpu-fixture.tsv'
         index.write_text('offline fixture pipeline index\n')
         receipt['artifact_sha256']['pipeline_index_sha256'] = runtime.sha(index)
+        report_path = artifact_paths['pipeline_manifest_sha256']
+        report = json.loads(report_path.read_text())
+        report.update(render=1, compute=1, mesh=0, kept=0, failed=0, write_failed=0,
+                      requested=2, completed=2, arch=receipt['identity']['gpu_architecture'],
+                      chain=self.record['shader_chain'], runtime_sha256=build_input_hash,
+                      verify_only=True, verification_process_fresh=True,
+                      verification_runtime_sha256=build_input_hash, native_exit_code=0,
+                      library_jit_attempts=0, archive_misses=0, archive_writes=0,
+                      verified_rows=2, archive_files_opened=1,
+                      libraries_manifest_sha256=receipt['artifact_sha256']['libraries_manifest_sha256'],
+                      compiler_context_sha256=receipt['compiler_context_sha256'], compiler_context_schema=2,
+                      archive_snapshot_before_sha256='e' * 64, archive_snapshot_after_sha256='e' * 64)
+        report_path.write_text(json.dumps(report))
+        receipt['artifact_sha256']['pipeline_manifest_sha256'] = runtime.sha(report_path)
+        receipt['archive_verification'] = {field: report[field] for field in runtime.ARCHIVE_VERIFICATION_FIELDS}
+        receipt['artifact_paths'] = {name: path.relative_to(app).as_posix() for name, path in artifact_paths.items()}
+        receipt['artifact_paths'].update(runtime_sha256='Contents/MacOS/KokiriGame',
+                                        pipeline_index_sha256=index.relative_to(app).as_posix())
         self.write_receipt(app, receipt, info)
         return app, receipt, info
 
@@ -437,6 +456,25 @@ class RuntimeUpdateTests(unittest.TestCase):
                     with patch.object(runtime.subprocess, 'run'):
                         with self.assertRaisesRegex(ValueError, 'Invalid qualified compiler observation'):
                             runtime.inspect_app(app, self.record)
+
+    def test_candidate_rejects_missing_relative_or_noncanonical_compiler_working_directory(self):
+        app, original, original_info = self.app()
+        original_manifest = self.library_manifest(app)
+        for directory in (None, 'relative/fixture', '/private/different-compiler'):
+            with self.subTest(working_directory=directory):
+                receipt, info, manifest = deepcopy(original), deepcopy(original_info), deepcopy(original_manifest)
+                observation = receipt['compiler_observation']
+                if directory is None:
+                    observation.pop('working_directory')
+                else:
+                    observation['working_directory'] = directory
+                with self.assertRaises(ValueError):
+                    self.compiler_key(observation)
+                manifest['compiler_observation'] = deepcopy(observation)
+                self.write_library_manifest(app, receipt, info, manifest)
+                with patch.object(runtime.subprocess, 'run'):
+                    with self.assertRaisesRegex(ValueError, 'Invalid qualified compiler observation'):
+                        runtime.inspect_app(app, self.record)
 
     def test_candidate_rejects_forged_context_digest_with_matching_observations(self):
         app, receipt, info = self.app()
@@ -746,8 +784,11 @@ class RuntimeUpdateTests(unittest.TestCase):
             candidate = runtime.inspect_app(app, self.record)
         baseline = dict(app=str(self.root / 'Baseline.app'), executable_sha256='4' * 64,
                         info_sha256='5' * 64, code_resources_sha256='7' * 64)
+        runtime.atomic_json(folder / 'input-provenance.json', dict(
+            schema='kokiri-runtime-input-provenance-v1', original=None, staged=None))
         runtime.atomic_json(folder / 'transaction.json', dict(phase='prepared', version=2,
-                                                            candidate=candidate, baseline=baseline))
+                                                            candidate=candidate, baseline=baseline,
+                                                            input_provenance_sha256=runtime.sha(folder / 'input-provenance.json')))
         return store, candidate, baseline
 
     def inspector(self, candidate, baseline):
