@@ -19,13 +19,20 @@ toolchain=sys.modules['metal_toolchain']
 class LibraryTests(unittest.TestCase):
     def qualified_observation(self):
         return dict(qualified=True, backend='metal', version='fixture',
+                    observation_schema=2,
                     executable_sha256='a'*64, effective_target='air64-apple-macosx26.0',
                     effective_flags=libraries.METAL_FLAGS, sdk_mode='compiler-default-resource-headers',
-                    resource_headers=dict(content_sha256='c'*64), host_identity=dict(os_build='fixture-build'),
-                    tool_components=[dict(role=role, executable_sha256=digest*64, dependencies=[])
+                    resource_headers=dict(content_sha256='c'*64),
+                    host_identity=dict(os_build='fixture-build', machine='arm64', kernel_release='fixture-kernel'),
+                    tool_components=[dict(role=role, executable_sha256=digest*64, dependencies=[],
+                                          path='/private/fixture-'+role, size=100)
                                      for role, digest in [('driver', 'a'), ('frontend', 'b'), ('linker', 'c')]],
-                    required_files=[dict(role='selected-invocation-input', sha256='d'*64)],
-                    effective_invocations=[['fixture-frontend', '-cc1'], ['fixture-linker']])
+                    required_files=[dict(role='selected-invocation-input', sha256='d'*64,
+                                         path='/private/libmetal_rt_osx.a', size=100)],
+                    effective_invocations=[['/private/fixture-frontend', '-cc1', '-triple', 'air64-apple-macosx26.0',
+                                            '-o', '<intermediate.air>', '<probe-dir>/identity.metal'],
+                                           ['/private/fixture-linker', '<intermediate.air>', '/private/libmetal_rt_osx.a',
+                                            '-o', '<probe-dir>/identity.partial']])
 
     def test_compiler_observation_hashes_selected_headers_and_actual_binary(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -101,6 +108,12 @@ class LibraryTests(unittest.TestCase):
                     compiler=old_identity, compiler_context_sha256=old_key,
                     compiler_observation=observation, files={library.name:libraries.digest(library)})))
                 changed = dict(observation, **change)
+                if 'executable_sha256' in change:
+                    changed['tool_components'] = [dict(item) for item in observation['tool_components']]
+                    changed['tool_components'][0]['executable_sha256'] = change['executable_sha256']
+                if 'effective_target' in change:
+                    changed['effective_invocations'] = [list(argv) for argv in observation['effective_invocations']]
+                    changed['effective_invocations'][0][3] = change['effective_target']
 
                 def compile_fixture(command, **kwargs):
                     Path(command[command.index('-o')+1]).write_bytes(b'new library')
@@ -133,6 +146,29 @@ class LibraryTests(unittest.TestCase):
     def test_library_driver_plan_must_include_linker(self):
         with self.assertRaisesRegex(ValueError, 'selected linker'):
             toolchain.driver_commands('"/fixture/metal" "-cc1" "-c"')
+
+    def test_qualified_context_rejects_missing_static_input_or_invocation_inventory(self):
+        for field, value in [('required_files', []), ('effective_invocations', None)]:
+            observation = self.qualified_observation()
+            observation[field] = value
+            with self.assertRaises(ValueError):
+                libraries.compiler_context_key(observation)
+        observation = self.qualified_observation()
+        observation['required_files'][0]['path'] = '/private/different.a'
+        with self.assertRaisesRegex(ValueError, 'selected input inventory incomplete'):
+            libraries.compiler_context_key(observation)
+
+    def test_qualified_context_rejects_role_mismatch_or_unowned_dependency_loader(self):
+        observation = self.qualified_observation()
+        observation['effective_invocations'][0][0] = '/private/unobserved-frontend'
+        with self.assertRaisesRegex(ValueError, 'executable roles'):
+            libraries.compiler_context_key(observation)
+        observation = self.qualified_observation()
+        observation['tool_components'][0]['dependencies'] = [dict(
+            loader_sha256='f'*64, install_name='/usr/lib/libSystem.B.dylib',
+            binding='os-build-system-component', os_build='fixture-build')]
+        with self.assertRaisesRegex(ValueError, 'loader or install name'):
+            libraries.compiler_context_key(observation)
 
     def runtime_cache(self, root, name='runtime', chain=None):
         cache = root/name

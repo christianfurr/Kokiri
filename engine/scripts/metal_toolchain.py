@@ -112,22 +112,73 @@ def compiler_context_key(observation):
         context['reason'] = observation.get('reason')
     else:
         components = observation.get('tool_components', [])
-        roles = [component.get('role') for component in components]
-        if (not all(role in roles for role in ('driver', 'frontend', 'linker')) or
-            any(not re.fullmatch('[0-9a-f]{64}', component.get('executable_sha256', '')) for component in components) or
+        roles = [component.get('role') for component in components if isinstance(component, dict)]
+        host = observation.get('host_identity', {})
+        def sha(value):
+            return isinstance(value, str) and re.fullmatch('[0-9a-f]{64}', value) is not None
+        def file_identity(record, field='sha256'):
+            return (isinstance(record, dict) and sha(record.get(field)) and
+                    isinstance(record.get('path'), str) and Path(record['path']).is_absolute() and
+                    type(record.get('size')) is int and record['size'] > 0)
+        if (not isinstance(components, list) or len(roles) != len(components) or
+            any(roles.count(role) != 1 for role in ('driver', 'frontend', 'linker')) or
+            not roles or roles[0] != 'driver' or roles[-1] != 'linker' or
+            any(not file_identity(component, 'executable_sha256') for component in components) or
             not isinstance(observation.get('required_files'), list) or
-            not observation.get('host_identity', {}).get('os_build')):
+            not isinstance(host, dict) or
+            any(not isinstance(host.get(field), str) or not host[field] for field in ('os_build', 'machine', 'kernel_release'))):
             raise ValueError('qualified Metal compiler observation lacks component or host identities')
+        if (observation.get('observation_schema') != 2 or
+            observation.get('executable_sha256') != components[0]['executable_sha256'] or
+            not sha(observation.get('resource_headers', {}).get('content_sha256')) or
+            observation.get('backend') != 'metal' or not isinstance(observation.get('effective_flags'), list) or
+            not observation['effective_flags'] or any(not isinstance(flag, str) for flag in observation['effective_flags']) or
+            not isinstance(observation.get('effective_target'), str) or not observation['effective_target'] or
+            observation.get('sdk_mode') != 'compiler-default-resource-headers'):
+            raise ValueError('qualified Metal compiler observation lacks component or host identities')
+        invocations = observation.get('effective_invocations')
+        if (not isinstance(invocations, list) or len(invocations) != len(components)-1 or
+            any(not isinstance(argv, list) or not argv or any(not isinstance(arg, str) for arg in argv) for argv in invocations) or
+            sum('-cc1' in argv for argv in invocations) != 1 or '-cc1' in invocations[-1]):
+            raise ValueError('qualified Metal compiler observation lacks effective library invocations')
+        for index, (component, argv) in enumerate(zip(components[1:], invocations)):
+            role = 'frontend' if '-cc1' in argv else 'linker' if index == len(invocations)-1 else 'compiler-tool'
+            if component['role'] != role or argv[0] != component['path']:
+                raise ValueError('selected compiler executable roles differ from effective invocations')
+            if role == 'frontend':
+                if argv.count('-triple') != 1 or argv.index('-triple')+1 >= len(argv) or argv[argv.index('-triple')+1] != observation.get('effective_target'):
+                    raise ValueError('selected frontend target differs from compiler observation')
+        planned_outputs = {argv[index+1] for argv in invocations for index, arg in enumerate(argv[:-1]) if arg == '-o'}
+        selected_inputs = {arg for argv in invocations for arg in argv[1:] if Path(arg).is_absolute() and
+                           Path(arg).suffix in ('.a', '.dylib', '.tbd', '.bc') and arg not in planned_outputs}
+        required = observation['required_files']
+        if (not selected_inputs or not any(Path(arg).suffix == '.a' for arg in selected_inputs) or
+            any(not file_identity(item) or item.get('role') != 'selected-invocation-input' for item in required) or
+            len({item['path'] for item in required}) != len(required) or
+            {item['path'] for item in required} != selected_inputs):
+            raise ValueError('compiler invocation input lacks content identity: selected input inventory incomplete')
+        graph_hashes = {component['executable_sha256'] for component in components}
+        for component in components:
+            if not isinstance(component.get('dependencies'), list):
+                raise ValueError('qualified Metal compiler observation lacks dependency audit')
+            graph_hashes.update(dep.get('sha256') for dep in component['dependencies']
+                                if isinstance(dep, dict) and dep.get('binding') == 'hashed-file')
         context['tool_components'] = []
         for component in components:
             if not isinstance(component.get('dependencies'), list):
                 raise ValueError('qualified Metal compiler observation lacks dependency audit')
             dependencies = []
             for dependency in component['dependencies']:
+                if (not isinstance(dependency, dict) or not sha(dependency.get('loader_sha256')) or
+                    dependency['loader_sha256'] not in graph_hashes or
+                    not isinstance(dependency.get('install_name'), str) or
+                    not dependency['install_name'].startswith(('/', '@loader_path/', '@executable_path/', '@rpath/'))):
+                    raise ValueError('compiler dependency lacks content identity: loader or install name')
                 if dependency.get('binding') == 'hashed-file':
-                    if not re.fullmatch('[0-9a-f]{64}', dependency.get('sha256', '')):
+                    if not file_identity(dependency):
                         raise ValueError('compiler dependency lacks content identity')
                 elif (dependency.get('binding') != 'os-build-system-component' or
+                      not dependency['install_name'].startswith(('/usr/lib/', '/System/Library/')) or
                       dependency.get('os_build') != observation['host_identity']['os_build']):
                     raise ValueError('compiler dependency lacks system identity')
                 dependencies.append({key: dependency.get(key) for key in (
@@ -136,11 +187,11 @@ def compiler_context_key(observation):
                 executable_sha256=component['executable_sha256'], dependencies=dependencies))
         context['required_files'] = []
         for required in observation['required_files']:
-            if not re.fullmatch('[0-9a-f]{64}', required.get('sha256', '')):
+            if not file_identity(required):
                 raise ValueError('compiler invocation input lacks content identity')
             context['required_files'].append(dict(role=required['role'], sha256=required['sha256']))
         context['host_identity'] = observation['host_identity']
-        context['effective_invocations'] = observation.get('effective_invocations')
+        context['effective_invocations'] = invocations
     encoded = json.dumps(context, sort_keys=True, separators=(',', ':')).encode()
     return hashlib.sha256(encoded).hexdigest()
 
@@ -182,7 +233,7 @@ def compiler_observation(metal, version, env, flags):
                                size=identity['size'], dependencies=tool_dependencies(executable, env, host['os_build'])))
     component_paths = {Path(component['path']) for component in components}
     planned_outputs = {argv[index+1] for argv in commands for index, arg in enumerate(argv[:-1]) if arg == '-o'}
-    required, seen = [], set()
+    required, seen, input_aliases = [], set(), {}
     for argv in commands:
         for argument in argv[1:]:
             candidate = Path(argument)
@@ -193,18 +244,24 @@ def compiler_observation(metal, version, env, flags):
                 resolved = candidate.resolve()
                 if str(resolved).startswith(str(Path(folder).resolve())+os.sep) or resolved in component_paths or resolved in seen:
                     continue
-                required.append(dict(role='selected-invocation-input', **file_content_identity(resolved)))
+                identity = file_content_identity(resolved)
+                required.append(dict(role='selected-invocation-input', **identity))
+                input_aliases[argument] = identity['path']
                 seen.add(resolved)
     def stable_argument(argument):
+        if argument in input_aliases:
+            return input_aliases[argument]
         for probe in sorted({folder, str(Path(folder).resolve())}, key=len, reverse=True):
             argument = argument.replace(probe, '<probe-dir>')
         return '<intermediate.air>' if re.search(r'/identity-[0-9a-f]+\.air$', argument) else argument
     invocations = [[stable_argument(argument) for argument in argv] for argv in commands]
+    for invocation, component in zip(invocations, components[1:]):
+        invocation[0] = component['path']
     sdk={}
     for key,arg in [('path','--show-sdk-path'),('version','--show-sdk-version')]:
         probe=subprocess.run(['xcrun','--sdk','macosx',arg],capture_output=True,text=True,env=env)
         sdk[key]=probe.stdout.strip() if probe.returncode==0 else None
-    return dict(qualified=True,backend='metal',path=str(Path(metal).resolve()),version=version,
+    observation = dict(qualified=True,backend='metal',path=str(Path(metal).resolve()),version=version,
                 executable_sha256=components[0]['executable_sha256'],
                 effective_flags=list(flags),effective_target=triples[0],driver_command=command,
                 driver_plan=result.stderr,driver_plan_sha256=hashlib.sha256(result.stderr.encode()).hexdigest(),
@@ -214,6 +271,8 @@ def compiler_observation(metal, version, env, flags):
                 sdk_mode='compiler-default-resource-headers',available_macos_sdk=sdk,
                 developer_dir=env.get('DEVELOPER_DIR'),
                 limitation='Declared library-driver tools, explicit file inputs and non-system load dependencies are hashed; system components are bound to OS build. Unseen dlopen components, runtime JIT and actual library loading are not established.')
+    compiler_context_key(observation)  # Qualified observations must pass the shared consumer validator too.
+    return observation
 
 
 def metal_compiler():
