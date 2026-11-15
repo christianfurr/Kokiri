@@ -242,7 +242,7 @@ static void mtk_warm_row(NSArray<NSString *> *c,NSMutableDictionary<NSString *,N
    2 already in the archive, 0 failed, -1 a row the archive does not take here: the phone compiles no mesh pipeline, and the
    iOS packaging's device libraries (TOTK_SHADER_DEVICE_LIBS) carry none yet. */
 static int mtk_fill_row(NSArray<NSString *> *c,NSMutableDictionary<NSString *,NvShader *> *dict) {
-    if(!mtk_device_compiles()||getenv("TOTK_SHADER_DEVICE_LIBS"))return -1;
+    if(!mtk_device_compiles()||shader_device_libs())return -1;
     mtk_row r={0};int parsed=mtk_row_parse(c,dict,&r);
     if(parsed<=0)return parsed;
     NSError *error=nil;int archived=0;id<MTLRenderPipelineState> ps=mtk_row_build(&r,&error,&archived);
