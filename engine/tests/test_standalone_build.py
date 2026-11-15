@@ -81,15 +81,18 @@ print('isolated ready and damaged-tool gates passed')
 
     def test_release_record_supplies_exact_source_without_git(self):
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);engine=root/'engine';engine.mkdir()
+            root=Path(directory)/'outer/source';engine=root/'engine';engine.mkdir(parents=True)
             chain=engine/'third_party/d2r_gfx/gfx/nvn/dmsh_chain.h';chain.parent.mkdir(parents=True)
             chain.write_text('#define DMSH_CHAIN "oot-test" /* game: oot */\n')
             marker=root/'kokiri-source-release.json'
             record=dict(schema='kokiri-runtime-source-v1',product=build.RUNTIME_BUNDLE_ID,
                         source_commit='a'*40,game_update=131072,shader_chain='oot-test')
             marker.write_text(json.dumps(record))
-            with patch.object(build,'GAME',engine),patch.object(build.subprocess,'run',return_value=subprocess.CompletedProcess([],1,'','')):
+            # This extracted source can sit below another repository's .git.
+            (root.parent/'.git').mkdir(exist_ok=True)
+            with patch.object(build,'GAME',engine),patch.object(build.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'b'*40,'')) as git:
                 self.assertEqual(build.exact_source_commit(),'a'*40)
+                git.assert_not_called()
                 record['shader_chain']='old-chain';marker.write_text(json.dumps(record))
                 with self.assertRaisesRegex(ValueError,'source-release'):
                     build.exact_source_commit()

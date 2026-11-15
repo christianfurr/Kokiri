@@ -182,8 +182,12 @@ def sha(path):
     return h.hexdigest()
 
 def exact_source_commit():
-    result=subprocess.run(['git','-C',GAME.parent,'rev-parse','HEAD'],capture_output=True,text=True)
-    if result.returncode==0:return result.stdout.strip()
+    # A release extracted inside an unrelated checkout must not inherit its HEAD.
+    if (GAME.parent/'.git').exists():
+        top=subprocess.run(['git','-C',GAME.parent,'rev-parse','--show-toplevel'],capture_output=True,text=True)
+        if top.returncode==0 and Path(top.stdout.strip()).resolve()==GAME.parent.resolve():
+            result=subprocess.run(['git','-C',GAME.parent,'rev-parse','HEAD'],capture_output=True,text=True)
+            if result.returncode==0:return result.stdout.strip()
     marker=GAME.parent/'kokiri-source-release.json'
     if marker.is_file():
         record=json.loads(marker.read_text())
