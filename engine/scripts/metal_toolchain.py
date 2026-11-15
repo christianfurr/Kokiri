@@ -10,6 +10,25 @@ import subprocess
 import tempfile
 
 METAL_FLAGS = ['-mmacosx-version-min=26.0', '-fmetal-math-mode=safe']
+QUALIFIED_DRIVER_FLAGS = (*METAL_FLAGS, '-fpreserve-invariance', '-fwrapv')
+CONFLICTING_COMPILE_FLAGS = frozenset(('-fno-wrapv', '-fno-preserve-invariance', '-fstrict-overflow',
+                                      '-ffast-math', '-funsafe-math-optimizations'))
+
+
+def validate_driver_flags(flags):
+    if (not isinstance(flags, list) or len(flags) != len(QUALIFIED_DRIVER_FLAGS) or
+        any(not isinstance(flag, str) for flag in flags) or set(flags) != set(QUALIFIED_DRIVER_FLAGS)):
+        raise ValueError('qualified Metal compiler flags must be the exact four safe driver options')
+
+
+def validate_invocation_math(invocations):
+    for argv in invocations:
+        for flag in argv[1:]:
+            if (flag.split('=', 1)[0] in CONFLICTING_COMPILE_FLAGS or
+                (flag.startswith('-fmetal-math-mode=') and flag != '-fmetal-math-mode=safe')):
+                raise ValueError('qualified Metal invocation contains a conflicting compilation option: '+flag)
+        if '-cc1' in argv and any(argv.count(flag) != 1 for flag in ('-fwrapv', '-fpreserve-invariance')):
+            raise ValueError('qualified Metal frontend lacks exact wrap and invariance options')
 
 
 def file_content_identity(path):
@@ -145,11 +164,13 @@ def compiler_context_key(observation):
         if observation.get('loader_environment_policy') != 'reject-nonempty-DYLD':
             raise ValueError('qualified Metal compiler observation lacks the required loader environment policy')
         context['loader_environment_policy'] = observation['loader_environment_policy']
+        validate_driver_flags(observation['effective_flags'])
         invocations = observation.get('effective_invocations')
         if (not isinstance(invocations, list) or len(invocations) != len(components)-1 or
             any(not isinstance(argv, list) or not argv or any(not isinstance(arg, str) for arg in argv) for argv in invocations) or
             sum('-cc1' in argv for argv in invocations) != 1 or '-cc1' in invocations[-1]):
             raise ValueError('qualified Metal compiler observation lacks effective library invocations')
+        validate_invocation_math(invocations)
         for index, (component, argv) in enumerate(zip(components[1:], invocations)):
             role = 'frontend' if '-cc1' in argv else 'linker' if index == len(invocations)-1 else 'compiler-tool'
             if component['role'] != role or argv[0] != component['path']:
@@ -214,6 +235,7 @@ def compiler_observation(metal, version, env, flags):
     overrides = sorted(key for key, value in env.items() if key.startswith('DYLD_') and value)
     if overrides:
         raise ValueError('qualified Metal compiler identity does not support nonempty DYLD_* environment: '+', '.join(overrides))
+    validate_driver_flags(flags)
     # Match build_shader_libs compile_one: no -c; this invocation produces a
     # library through the selected frontend AND linker. -### performs no codegen.
     with tempfile.TemporaryDirectory(prefix='kokiri-metal-identity-') as folder:

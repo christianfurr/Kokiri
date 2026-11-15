@@ -31,6 +31,7 @@ class LibraryTests(unittest.TestCase):
                     required_files=[dict(role='selected-invocation-input', sha256='d'*64,
                                          path='/private/libmetal_rt_osx.a', size=100)],
                     effective_invocations=[['/private/fixture-frontend', '-cc1', '-triple', 'air64-apple-macosx26.0',
+                                            '-fwrapv', '-fpreserve-invariance',
                                             '-o', '<intermediate.air>', '<probe-dir>/identity.metal'],
                                            ['/private/fixture-linker', '<intermediate.air>', '/private/libmetal_rt_osx.a',
                                             '-o', '<probe-dir>/identity.partial']])
@@ -52,6 +53,7 @@ class LibraryTests(unittest.TestCase):
                 if '-###' in command:
                     self.assertNotIn('-c', command)
                     plan = (f'"{frontend}" "-cc1" "-triple" "air64-apple-macosx26.0" "-resource-dir" "{resource}" '
+                            '"-fwrapv" "-fpreserve-invariance" '
                             f'"-o" "/tmp/identity-abcd.air" "{command[-1]}"\n'
                             f'"{linker}" "-o" "{command[command.index("-o")+1]}" "/tmp/identity-abcd.air" "{archive}"')
                     return subprocess.CompletedProcess(command, 0, '', plan)
@@ -62,15 +64,15 @@ class LibraryTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, 'fixture-sdk', '')
 
             with mock.patch.object(toolchain.subprocess, 'run', side_effect=driver):
-                first = toolchain.compiler_observation(str(compiler), 'same-version', {}, ['-safe'])
+                first = toolchain.compiler_observation(str(compiler), 'same-version', {}, libraries.METAL_FLAGS)
                 header.write_text('changed header')
-                second = toolchain.compiler_observation(str(compiler), 'same-version', {}, ['-safe'])
+                second = toolchain.compiler_observation(str(compiler), 'same-version', {}, libraries.METAL_FLAGS)
                 frontend.write_bytes(b'changed frontend')
-                third = toolchain.compiler_observation(str(compiler), 'same-version', {}, ['-safe'])
+                third = toolchain.compiler_observation(str(compiler), 'same-version', {}, libraries.METAL_FLAGS)
                 linker.write_bytes(b'changed linker')
-                fourth = toolchain.compiler_observation(str(compiler), 'same-version', {}, ['-safe'])
+                fourth = toolchain.compiler_observation(str(compiler), 'same-version', {}, libraries.METAL_FLAGS)
                 dependency.write_bytes(b'changed dynamically loaded library')
-                fifth = toolchain.compiler_observation(str(compiler), 'same-version', {}, ['-safe'])
+                fifth = toolchain.compiler_observation(str(compiler), 'same-version', {}, libraries.METAL_FLAGS)
             self.assertEqual(first['executable_sha256'], hashlib.sha256(compiler.read_bytes()).hexdigest())
             self.assertEqual(first['resource_headers']['files'], 1)
             self.assertNotEqual(libraries.compiler_context_key(first), libraries.compiler_context_key(second))
@@ -181,6 +183,38 @@ class LibraryTests(unittest.TestCase):
         first['effective_invocations'][0].append('-fcoverage-compilation-dir=/first/checkout')
         second['effective_invocations'][0].append('-fcoverage-compilation-dir=/relocated/checkout')
         self.assertNotEqual(libraries.compiler_context_key(first), libraries.compiler_context_key(second))
+
+    def test_qualified_driver_policy_rejects_overrides_duplicates_and_extra_options(self):
+        for extra in ('-fno-wrapv', '-fno-preserve-invariance', '-ffast-math', '-fwrapv', '-unknown-option'):
+            with self.subTest(extra=extra):
+                observation = self.qualified_observation()
+                observation['effective_flags'] = [*libraries.METAL_FLAGS, extra]
+                with self.assertRaisesRegex(ValueError, 'exact four'):
+                    libraries.compiler_context_key(observation)
+        observation = self.qualified_observation()
+        observation['effective_flags'] = list(reversed(libraries.METAL_FLAGS))
+        self.assertNotEqual(libraries.compiler_context_key(observation),
+                            libraries.compiler_context_key(self.qualified_observation()))
+
+    def test_frontend_policy_rejects_conflicting_options_despite_exact_driver_flags(self):
+        for extra in ('-fno-wrapv', '-fno-preserve-invariance', '-fstrict-overflow',
+                      '-ffast-math', '-funsafe-math-optimizations', '-fmetal-math-mode=fast'):
+            with self.subTest(extra=extra):
+                observation = self.qualified_observation()
+                observation['effective_invocations'][0].append(extra)
+                with self.assertRaisesRegex(ValueError, 'conflicting compilation option'):
+                    libraries.compiler_context_key(observation)
+        for missing in ('-fwrapv', '-fpreserve-invariance'):
+            observation = self.qualified_observation()
+            observation['effective_invocations'][0].remove(missing)
+            with self.assertRaisesRegex(ValueError, 'exact wrap and invariance'):
+                libraries.compiler_context_key(observation)
+
+    def test_safe_frontend_driver_defaults_remain_qualified(self):
+        observation = self.qualified_observation()
+        observation['effective_invocations'][0].extend(
+            ['-fmetal-math-fp32-functions=fast', '-fno-rounding-math', '-ffp-contract=on'])
+        self.assertRegex(libraries.compiler_context_key(observation), '^[0-9a-f]{64}$')
 
     def test_qualified_context_rejects_missing_static_input_or_invocation_inventory(self):
         for field, value in [('required_files', []), ('effective_invocations', None)]:
