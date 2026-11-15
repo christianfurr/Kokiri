@@ -69,6 +69,40 @@ class RuntimeUpdateTests(unittest.TestCase):
         self.record.update(archive_sha256=runtime.sha(path), archive_bytes=path.stat().st_size)
         return path
 
+    def compiler_observation(self):
+        # Synthetic provenance; only the shared pure validator runs in these tests.
+        return dict(
+            observation_schema=2, qualified=True, backend='metal', version='offline compiler fixture',
+            executable_sha256='8' * 64,
+            effective_flags=['-mmacosx-version-min=26.0', '-fmetal-math-mode=safe',
+                             '-fpreserve-invariance', '-fwrapv'],
+            effective_target='air64-apple-macosx26.0.0', sdk_mode='compiler-default-resource-headers',
+            resource_headers=dict(content_sha256='7' * 64),
+            host_identity=dict(os_build='offline-build', machine='arm64', kernel_release='offline-kernel'),
+            tool_components=[
+                dict(role='driver', path='/private/fixture/metal', size=100, executable_sha256='8' * 64,
+                     dependencies=[dict(loader_sha256='8' * 64, install_name='/usr/lib/libSystem.B.dylib',
+                                        binding='os-build-system-component', os_build='offline-build')]),
+                dict(role='frontend', path='/private/fixture/frontend', size=200, executable_sha256='6' * 64,
+                     dependencies=[dict(loader_sha256='6' * 64, install_name='@rpath/libCompiler.dylib',
+                                        binding='hashed-file', sha256='5' * 64,
+                                        path='/private/fixture/libCompiler.dylib', size=50)]),
+                dict(role='linker', path='/private/fixture/linker', size=300, executable_sha256='4' * 64,
+                     dependencies=[])],
+            required_files=[dict(role='selected-invocation-input', sha256='3' * 64,
+                                 path='/private/fixture/libmetal_rt_osx.a', size=123)],
+            effective_invocations=[
+                ['/private/fixture/frontend', '-cc1', '-triple', 'air64-apple-macosx26.0.0',
+                 '-o', '<intermediate.air>', '<probe-dir>/identity.metal'],
+                ['/private/fixture/linker', '<intermediate.air>', '/private/fixture/libmetal_rt_osx.a',
+                 '-o', '<probe-dir>/identity.partial']])
+
+    def compiler_key(self, observation):
+        spec = importlib.util.spec_from_file_location('trusted_compiler_fixture', runtime.TRUSTED_COMPILER_HELPER)
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        return helper.compiler_context_key(observation)
+
     def app(self, folder=None):
         app = (folder or self.root) / 'Kokiri Game.app'
         executable = app / 'Contents/MacOS/KokiriGame'
@@ -89,6 +123,9 @@ class RuntimeUpdateTests(unittest.TestCase):
                        artifact_sha256=dict(runtime_sha256=build_input_hash),
                        libraries=dict(requested=2, completed=2, failed=0),
                        pipelines=dict(requested=2, completed=2, failed=0, write_failed=0, unaccounted=0))
+        observation = self.compiler_observation()
+        receipt.update(compiler_observation=observation, compiler_context_schema=2,
+                       compiler_context_sha256=self.compiler_key(observation))
         info = dict(CFBundleIdentifier=runtime.PRODUCT, CFBundleExecutable='KokiriGame', KokiriGameUpdate='131072',
                     KokiriPrepared=True, KokiriShaders='full', KokiriSourceCommit=self.record['source_commit'],
                     KokiriBuildRuntimeSHA256=build_input_hash)
@@ -102,7 +139,11 @@ class RuntimeUpdateTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             payload = path.parent / 'fixture-payload.dat'
             payload.write_bytes(('offline fixture ' + name).encode())
-            path.write_text(json.dumps(dict(files={payload.name: runtime.sha(payload)})))
+            manifest = dict(files={payload.name: runtime.sha(payload)})
+            if name == 'libraries_manifest_sha256':
+                manifest.update(compiler_observation=deepcopy(observation), compiler_context_schema=2,
+                                compiler_context_sha256=receipt['compiler_context_sha256'])
+            path.write_text(json.dumps(manifest))
             receipt['artifact_sha256'][name] = runtime.sha(path)
         index = build / 'pipelines/pipelines-apple-gpu-fixture.tsv'
         index.write_text('offline fixture pipeline index\n')
@@ -116,6 +157,140 @@ class RuntimeUpdateTests(unittest.TestCase):
         path.write_text(json.dumps(receipt))
         info['KokiriPreparationReceiptSHA256'] = runtime.sha(path)
         (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
+
+    def write_library_manifest(self, app, receipt, info, manifest):
+        path = app / 'Contents/Resources/totk/build/shader-libs/libraries-manifest.json'
+        path.write_text(json.dumps(manifest))
+        receipt['artifact_sha256']['libraries_manifest_sha256'] = runtime.sha(path)
+        self.write_receipt(app, receipt, info)
+
+    def library_manifest(self, app):
+        return runtime.read_json(app / 'Contents/Resources/totk/build/shader-libs/libraries-manifest.json')
+
+    def test_schema2_compiler_receipt_and_library_context_are_qualified(self):
+        app, receipt, info = self.app()
+        self.assertEqual(receipt['compiler_context_sha256'], self.compiler_key(receipt['compiler_observation']))
+        with patch.object(runtime.subprocess, 'run'):
+            self.assertEqual(runtime.inspect_app(app, self.record)['version'], 2)
+
+    def test_candidate_rejects_old_missing_or_boolean_context_schema_despite_resealed_receipt(self):
+        app, original, original_info = self.app()
+        original_manifest = self.library_manifest(app)
+        for location, value in (('receipt', 1), ('receipt', None), ('receipt', True),
+                                ('manifest', 1), ('manifest', None), ('manifest', True)):
+            with self.subTest(location=location, schema=value):
+                receipt, info, manifest = deepcopy(original), deepcopy(original_info), deepcopy(original_manifest)
+                target = receipt if location == 'receipt' else manifest
+                if value is None:
+                    target.pop('compiler_context_schema')
+                else:
+                    target['compiler_context_schema'] = value
+                self.write_library_manifest(app, receipt, info, manifest)
+                with patch.object(runtime.subprocess, 'run'):
+                    with self.assertRaises(ValueError):
+                        runtime.inspect_app(app, self.record)
+
+    def test_candidate_rejects_missing_unqualified_or_old_compiler_observations(self):
+        app, original, original_info = self.app()
+        original_manifest = self.library_manifest(app)
+        for field, value in (('observation_schema', 1), ('observation_schema', True),
+                             ('qualified', False), ('qualified', 1), ('qualified', None), ('missing', None)):
+            with self.subTest(field=field, value=value):
+                receipt, info, manifest = deepcopy(original), deepcopy(original_info), deepcopy(original_manifest)
+                for target in (receipt, manifest):
+                    if field == 'missing':
+                        target.pop('compiler_observation')
+                    else:
+                        target['compiler_observation'][field] = value
+                self.write_library_manifest(app, receipt, info, manifest)
+                with patch.object(runtime.subprocess, 'run'):
+                    with self.assertRaises(ValueError):
+                        runtime.inspect_app(app, self.record)
+
+    def test_candidate_rejects_malformed_compiler_components_after_receipt_rehash(self):
+        app, original, original_info = self.app()
+        original_manifest = self.library_manifest(app)
+        for mutation in ('relative_path', 'missing_frontend_hash', 'missing_invocation_input', 'unknown_loader'):
+            with self.subTest(mutation=mutation):
+                receipt, info, manifest = deepcopy(original), deepcopy(original_info), deepcopy(original_manifest)
+                observation = receipt['compiler_observation']
+                if mutation == 'relative_path':
+                    observation['tool_components'][0]['path'] = 'relative-metal'
+                elif mutation == 'missing_frontend_hash':
+                    observation['tool_components'][1].pop('executable_sha256')
+                elif mutation == 'missing_invocation_input':
+                    observation['required_files'] = []
+                else:
+                    observation['tool_components'][0]['dependencies'][0]['loader_sha256'] = '0' * 64
+                manifest['compiler_observation'] = deepcopy(observation)
+                self.write_library_manifest(app, receipt, info, manifest)
+                with patch.object(runtime.subprocess, 'run'):
+                    with self.assertRaises(ValueError):
+                        runtime.inspect_app(app, self.record)
+
+    def test_candidate_rejects_receipt_and_library_observation_mismatch(self):
+        app, receipt, info = self.app()
+        manifest = self.library_manifest(app)
+        manifest['compiler_observation']['version'] = 'different qualified compiler fixture'
+        manifest['compiler_context_sha256'] = self.compiler_key(manifest['compiler_observation'])
+        self.write_library_manifest(app, receipt, info, manifest)
+        with patch.object(runtime.subprocess, 'run'):
+            with self.assertRaises(ValueError):
+                runtime.inspect_app(app, self.record)
+
+    def test_candidate_requires_current_target_and_each_correctness_flag(self):
+        app, original, original_info = self.app()
+        original_manifest = self.library_manifest(app)
+        for missing in ('-mmacosx-version-min=26.0', '-fpreserve-invariance', '-fwrapv', 'target'):
+            with self.subTest(missing=missing):
+                receipt, info, manifest = deepcopy(original), deepcopy(original_info), deepcopy(original_manifest)
+                observation = receipt['compiler_observation']
+                if missing == 'target':
+                    observation['effective_target'] = 'air64-apple-macosx27.0.0'
+                    observation['effective_invocations'][0][3] = observation['effective_target']
+                else:
+                    observation['effective_flags'].remove(missing)
+                # A self-consistent digest cannot make an unsupported target or
+                # reduced correctness options eligible for a new runtime update.
+                receipt['compiler_context_sha256'] = self.compiler_key(observation)
+                manifest['compiler_observation'] = deepcopy(observation)
+                manifest['compiler_context_sha256'] = receipt['compiler_context_sha256']
+                self.write_library_manifest(app, receipt, info, manifest)
+                with patch.object(runtime.subprocess, 'run'):
+                    with self.assertRaises(ValueError):
+                        runtime.inspect_app(app, self.record)
+
+    def test_candidate_rejects_forged_context_digest_with_matching_observations(self):
+        app, receipt, info = self.app()
+        manifest = self.library_manifest(app)
+        receipt['compiler_context_sha256'] = '0' * 64
+        manifest['compiler_context_sha256'] = '0' * 64
+        self.write_library_manifest(app, receipt, info, manifest)
+        with patch.object(runtime.subprocess, 'run'):
+            with self.assertRaises(ValueError):
+                runtime.inspect_app(app, self.record)
+
+    def test_historical_schema1_rollback_baseline_remains_recoverable_when_unchanged(self):
+        app, receipt, info = self.app()
+        manifest = self.library_manifest(app)
+        for target in (receipt, manifest):
+            target['compiler_context_schema'] = 1
+            target['compiler_observation']['observation_schema'] = 1
+        self.write_library_manifest(app, receipt, info, manifest)
+        with patch.object(runtime.subprocess, 'run'), patch.object(runtime, 'game_closed'):
+            historical = runtime.inspect_app(app)
+            historical.update(preparation_receipt_sha256=runtime.sha(app / runtime.RECEIPT),
+                              preparation_artifact_sha256=runtime.verify_preparation_artifacts(app, receipt))
+            runtime.unchanged(historical)
+            store = self.root / 'historical-store'
+            store.mkdir(mode=0o700)
+            runtime.atomic_json(store / 'state.json',
+                                dict(schema=1, highest_version=2, active=None, previous=historical))
+            restored = runtime.rollback(store)
+            self.assertEqual(restored['active'], historical)
+            self.assertEqual(restored['highest_version'], 2)
+            with self.assertRaises(ValueError):
+                runtime.inspect_app(app, self.record)
 
     def test_manifest_verifies_exact_bytes_and_monotonic_version(self):
         manifest, signature = self.manifest()
