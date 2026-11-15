@@ -28,6 +28,7 @@ def module(name, filename):
 
 runtime = module('runtime_test_client', 'runtime_update.py')
 packager = module('runtime_test_packager', 'prepare_runtime_source.py')
+command_journal = None
 
 C_FIXTURE = r'''
 #include <mach-o/dyld.h>
@@ -90,6 +91,12 @@ logs=Path(a.work)/'logs';logs.mkdir(exist_ok=True);(logs/'package-output.json').
 
 
 def run(arguments, cwd=None):
+    if command_journal is not None:
+        with command_journal.open('a') as journal:
+            journal.write(json.dumps(dict(command=[str(value) for value in arguments], cwd=str(cwd or Path.cwd()),
+                                          started_at_utc=datetime.now(timezone.utc).isoformat())) + '\n')
+            journal.flush()
+            os.fsync(journal.fileno())
     return subprocess.check_output([str(value) for value in arguments], cwd=cwd, stderr=subprocess.STDOUT, timeout=20)
 
 
@@ -166,6 +173,7 @@ def observe(marker, expected, app, owned):
                                 and rows[2] == str(executable) and identity['started_sec'] == int(rows[3])
                                 and identity['started_usec'] == int(rows[4]) and identity['uid'] == os.getuid(),
                                 'Launch marker does not identify the selected diagnostic process/start')
+                runtime.atomic_json(marker.with_name('observed-' + expected + '.json'), identity)
                 owned.append(identity)
                 return identity
         time.sleep(0.05)
@@ -173,12 +181,18 @@ def observe(marker, expected, app, owned):
 
 
 def selftest(output):
+    global command_journal
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
     output = Path(output).resolve()
     runtime.require(not output.exists() and not output.is_relative_to(runtime.ROOT), 'Use a fresh external private test folder')
     runtime.game_closed()
     output.mkdir(mode=0o700)
+    command_journal = output / 'commands.jsonl'
+    runtime.atomic_json(output / 'invocation.json', dict(arguments=sys.argv, cwd=str(Path.cwd()),
+                        python=sys.executable, harness_sha256=runtime.sha(Path(__file__)),
+                        updater_sha256=runtime.sha(Path(__file__).with_name('runtime_update.py')),
+                        packager_sha256=runtime.sha(Path(__file__).with_name('prepare_runtime_source.py'))))
     marker = output / 'launch-marker.txt'
     app = output / 'baseline/Kokiri Game.app'
     mac, resources = app / 'Contents/MacOS', app / 'Contents/Resources'

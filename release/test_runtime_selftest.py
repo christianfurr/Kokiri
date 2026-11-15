@@ -2,6 +2,7 @@
 import ctypes
 import errno
 import importlib.util
+import json
 from pathlib import Path
 import signal
 from types import SimpleNamespace
@@ -89,6 +90,7 @@ class DiagnosticOwnershipTests(unittest.TestCase):
                 actual = harness.observe(marker, 'updated-fixture', Path('/private/fixture/Kokiri Game.app'), owned)
             self.assertEqual(actual, self.identity)
             self.assertEqual(owned, [self.identity])
+            self.assertEqual(json.loads((marker.parent / 'observed-updated-fixture.json').read_text()), self.identity)
 
     def test_observe_rejects_stale_birth_owner_and_wrong_executable(self):
         with tempfile.TemporaryDirectory() as temporary:
