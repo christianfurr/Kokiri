@@ -198,8 +198,12 @@ static NSString *game_data_ask(NSArray<NSString *> *looked, unsigned long long s
 }
 
 /* Returns -1 with *boot set to the arguments the game boots with (rewritten folder, "boot"), or the status to exit with. */
+#include "kokiri_development.h"
+
 int runtime_app_launch(int argc, char **argv, char ***boot) {
     @autoreleasepool {
+        if (argc > 1 && !strcmp(argv[1], "--kokiri-development"))
+            return kokiri_development_launch(argc, argv, boot);
         NSString *root = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"totk"];
         NSString *binary = [root stringByAppendingPathComponent:@"rewritten/" TOTK_GAME_DIR "/main.patched.bin"];   // the game's code
         /* --check (build_app.py, once after packaging): only look that the game is there and exit. The first run of a new

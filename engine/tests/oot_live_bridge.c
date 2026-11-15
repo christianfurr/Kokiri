@@ -7,7 +7,10 @@
 static uint64_t fixture_now = 1000000000ULL;
 uint64_t runtime_now_ns(void) { return fixture_now; }
 int runtime_fs_save_busy(void) { return 0; }
+static int fixture_development_active = 1;
+extern int runtime_kokiri_development_active(void) __attribute__((weak_import));
 #include "oot_live.h"
+int runtime_kokiri_development_active(void) { return fixture_development_active; }
 
 static unsigned checked;
 #define CHECK(x, label) do { if (!(x)) { fprintf(stderr, "FAILED: %s\n", label); return 2; } checked++; } while (0)

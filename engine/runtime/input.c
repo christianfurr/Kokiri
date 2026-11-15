@@ -11,12 +11,17 @@
 #include <string.h>
 #include <stdatomic.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 typedef struct{int64_t sampling;uint64_t buttons;int32_t lx,ly,rx,ry;uint32_t attributes,pad;} NpadState;
 _Static_assert(sizeof(NpadState)==40,"Npad full-key ABI");
 static pthread_mutex_t inputLock=PTHREAD_MUTEX_INITIALIZER;
 static unsigned char keys[128];static uint64_t pending;
 static uint32_t styles=1;static bool enabled,allowed=true;static int holdType;
 static int64_t sample;static uint64_t padSeen;
+static int32_t kokiriDevAxes[4];   /* inputLock: bounded development input, cleared after every action */
+static _Atomic int kokiriDevInputActive;static int64_t kokiriDevDelivered;static uint64_t kokiriDevButtons;
+extern int runtime_kokiri_development_active(void) __attribute__((weak_import));
+extern void runtime_kokiri_development_user_takeover(void) __attribute__((weak_import));
 /* Scripted and auto-load presses (runtime_input_key_synthetic: TOTK_INPUT_SCRIPT, TOTK_INPUT_FILE, autoload.c) keep this
    fixed layout, whatever the player's, so test scripts mean the same keys on every Mac: J A, K / Space B, I X, U Y, Q / E
    L / R, Option / Shift ZL / ZR, Return +, Tab / Esc -, F T H G the d-pad, Z / C the stick presses; W A S D and the arrow
@@ -79,6 +84,8 @@ static void input_trace_set(int on) {
    input (agent_slot_limit.h). This default answers where game_slot.c is not linked (input probes, iOS). */
 __attribute__((weak)) void runtime_slot_activity(int user){(void)user;}
 static void user_input(const char *what){
+ atomic_store(&kokiriDevInputActive,0);   /* no agent input in the human takeover poll */
+ if(runtime_kokiri_development_user_takeover)runtime_kokiri_development_user_takeover();
  runtime_slot_activity(1);
  runtime_survey_cancel_user();
  runtime_autoload_user_input();
@@ -165,18 +172,23 @@ static int handheld_states(NpadState *out,int max,const uint32_t *id){
  if(n&&id&&*id==0x20)runtime_oot_live_tick();
 #endif
  return n;}
-static int pad_states(NpadState *out,int max,const uint32_t *id,uint32_t want_style){if(max<=0)return 0;if(id)input_log(want_style==2?"handheld state":"full-key state",*id);if(!out||!id)runtime_fail("controller output pointer");pthread_mutex_lock(&inputLock);NpadState state={.sampling=++sample};if(enabled&&allowed&&*id==pad_id()&&want_style==pad_style()&&(styles&want_style)){
+static int pad_states(NpadState *out,int max,const uint32_t *id,uint32_t want_style){if(max<=0)return 0;if(id)input_log(want_style==2?"handheld state":"full-key state",*id);if(!out||!id)runtime_fail("controller output pointer");pthread_mutex_lock(&inputLock);int physicalTakeover=0;NpadState state={.sampling=++sample};if(enabled&&allowed&&*id==pad_id()&&want_style==pad_style()&&(styles&want_style)){
  state.attributes=1;for(unsigned i=0;i<128;i++)if(keys[i])state.buttons|=button(i);state.buttons|=heldOut.buttons|pending;pending=0;
  extern uint64_t runtime_opening_auto_skip_buttons(void);state.buttons|=runtime_opening_auto_skip_buttons();
  state.lx=32767*((int)keys[2]-(int)keys[0]);state.ly=32767*((int)keys[13]-(int)keys[1]);state.rx=32767*((int)keys[124]-(int)keys[123]);state.ry=32767*((int)keys[126]-(int)keys[125]);
  if(heldOut.lx)state.lx=heldOut.lx;if(heldOut.ly)state.ly=heldOut.ly;if(heldOut.rx)state.rx=heldOut.rx;if(heldOut.ry)state.ry=heldOut.ry;
  RuntimeGamepadState pad;runtime_gamepad_read(&pad);if(ignore_user())pad=(RuntimeGamepadState){0};state.buttons|=pad.buttons;
- if(pad.buttons&~padSeen||abs(pad.lx)>16384||abs(pad.ly)>16384||abs(pad.rx)>16384||abs(pad.ry)>16384)user_input("controller");padSeen=pad.buttons;
+ if(pad.buttons&~padSeen||abs(pad.lx)>16384||abs(pad.ly)>16384||abs(pad.rx)>16384||abs(pad.ry)>16384){physicalTakeover=1;atomic_store(&kokiriDevInputActive,0);}padSeen=pad.buttons;
  if(abs(pad.lx)>abs(state.lx))state.lx=pad.lx;if(abs(pad.ly)>abs(state.ly))state.ly=pad.ly;
  if(abs(pad.rx)>abs(state.rx))state.rx=pad.rx;if(abs(pad.ry)>abs(state.ry))state.ry=pad.ry;
+ if(atomic_load(&kokiriDevInputActive)&&runtime_kokiri_development_active&&runtime_kokiri_development_active()){
+  kokiriDevDelivered++;state.buttons|=kokiriDevButtons;
+  if(kokiriDevAxes[0]||kokiriDevAxes[1]){state.lx=kokiriDevAxes[0];state.ly=kokiriDevAxes[1];}
+  if(kokiriDevAxes[2]||kokiriDevAxes[3]){state.rx=kokiriDevAxes[2];state.ry=kokiriDevAxes[3];}
+ }
  if(runtime_vr_stick_pitch_locked())state.ry=0;   /* zeldaVR: up / down is the headset's (game_patches_v143.c) */
  }uint64_t trace=runtime_input_trace_next();if(trace)fprintf(stderr,"[oot-input-trace] %llu t=%llu guest id=%#x want=%#x styles=%#x enabled=%d allowed=%d ignored=%d sample=%lld attr=%#x buttons=%#llx axes=%d,%d,%d,%d\n",(unsigned long long)trace,(unsigned long long)runtime_now_ns(),*id,want_style,styles,enabled,allowed,ignore_user(),(long long)state.sampling,state.attributes,(unsigned long long)state.buttons,state.lx,state.ly,state.rx,state.ry);
- if(getenv("TOTK_INPUT_LOG")){static int left=120;static uint64_t previous;if(previous!=state.buttons&&left-->0){previous=state.buttons;fprintf(stderr,"[oot-input] id=%#x style=%#x enabled=%d allowed=%d buttons=%#llx sample=%lld\n",*id,styles,enabled,allowed,(unsigned long long)state.buttons,(long long)state.sampling); }}*out=state;pthread_mutex_unlock(&inputLock);return 1;}
+ if(getenv("TOTK_INPUT_LOG")){static int left=120;static uint64_t previous;if(previous!=state.buttons&&left-->0){previous=state.buttons;fprintf(stderr,"[oot-input] id=%#x style=%#x enabled=%d allowed=%d buttons=%#llx sample=%lld\n",*id,styles,enabled,allowed,(unsigned long long)state.buttons,(long long)state.sampling); }}*out=state;pthread_mutex_unlock(&inputLock);if(physicalTakeover)user_input("controller");return 1;}
 static int disconnected_states(NpadState *out,int max,const uint32_t *id){if(id)input_log("joy-con state",*id);if(max<=0)return 0;if(!out)runtime_fail("controller output pointer");pthread_mutex_lock(&inputLock);*out=(NpadState){.sampling=++sample};pthread_mutex_unlock(&inputLock);return 1;}
 static void hold_type(int type){if(type<0||type>1)runtime_fail("invalid joy hold type");holdType=type;(void)holdType;}
 #ifdef GAME_NS2
@@ -296,6 +308,11 @@ extern void runtime_front_request_close(void);
 /* "mscan ...": memory scan and write watch (runtime/mem_scan.h, in services.c); this default answers in the probes that
    link input.c alone, which have no game memory. */
 __attribute__((weak)) int runtime_mem_scan_command(const char *line) { (void)line; return 0; }
+#if !TARGET_OS_IPHONE
+#include "kokiri_development_input.h"
+#else
+static int kokiri_dev_command(const char *line){(void)line;return 0;}
+#endif
 static void *input_file(void *arg) {
     FILE *f = fopen((const char *)arg, "r"); if (!f) runtime_fail("cannot open TOTK_INPUT_FILE");
     char line[1200];
@@ -315,6 +332,10 @@ static void *input_file(void *arg) {
             continue;
         }
         runtime_slot_activity(0);   /* any command keeps an agent's game open (a line the reader refuses ends the game) */
+        if (kokiri_dev_command(line)) continue;
+        /* The dedicated entry accepts authenticated typed controls only. Normal
+           human sessions retain their existing observation/diagnostic channel. */
+        if(getenv("KOKIRI_DEVELOPMENT_ROOT"))continue;
         if (runtime_survey_command(line)) continue;
 #if defined(GAME_OOT) && !TARGET_OS_IPHONE
         if (runtime_oot_live_command(line)) continue;

@@ -48,6 +48,8 @@ static int oot_live_related_path(const char *a, const char *b) {
 /* The ordinary product only observes position. Testing moves must name an agent
    owner and a separate existing profile, outside either real profile's tree. */
 static int oot_live_mutations_allowed(void) {
+    extern int runtime_kokiri_development_active(void) __attribute__((weak_import));
+    if (!runtime_kokiri_development_active || !runtime_kokiri_development_active()) return 0;
     const char *owner = getenv("TOTK_SLOT_OWNER"), *profile = getenv("TOTK_PROFILE_DIR");
     if (!owner || !*owner || !strcmp(owner, "user") || !profile || !*profile) return 0;
     char resolved[PATH_MAX]; struct stat info;

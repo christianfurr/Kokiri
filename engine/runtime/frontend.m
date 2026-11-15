@@ -806,6 +806,12 @@ static void note_occlusion(const char *when){int v=(window.occlusionState&NSWind
 static TOTKWindowDelegate *windowDelegate;
 int runtime_front_window_visible(void){return atomic_load(&windowVisible);}
 void runtime_front_request_close(void){dispatch_async(dispatch_get_main_queue(), ^{[window performClose:nil];});}
+extern int runtime_game_slot_agent_close_begin(void) __attribute__((weak_import));
+extern void runtime_game_slot_agent_close_end(void) __attribute__((weak_import));
+void runtime_front_request_agent_close(void){dispatch_async(dispatch_get_main_queue(), ^{
+ if(!runtime_game_slot_agent_close_begin||!runtime_game_slot_agent_close_end||!runtime_game_slot_agent_close_begin())return;
+ [window performClose:nil];runtime_game_slot_agent_close_end();
+});}
 /* Save sync (runtime/cloud_save.m): the folder the saves are copied to, e.g. an iCloud Drive folder shared with the
    iPhone / iPad or another Apple ID. Stored in RUNTIME_SAVE_SYNC_DEFAULTS (TOTK_CLOUD_SAVE_FOLDER, read by app/launcher.m)
    and used from the next start: the running game already chose its save. A sheet, so the game keeps drawing. */

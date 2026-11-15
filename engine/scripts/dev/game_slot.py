@@ -10,6 +10,7 @@ Files in the slot directory (TOTK_GAME_SLOT_DIR, default ~/Library/Application S
 the folder the App's launcher passes to its game, so scripts, packaging steps and games all queue in one place; until
 2026-11-11 the default was <native-port>/analysis/game-slot and the packaging's pipeline step never met a running game):
   lock               flock(2) target; the holder keeps it locked while its game runs (the kernel drops it on exit)
+  preemption.lock    persistent signal/takeover guard, never deleted or rotated
   holder             key=value lines about the current holder (stale once the lock is free)
   queue/<ns>-<pid>   waiters, first come first served
   user-request       the user's game while it waits; it goes first and stops an agent's game that holds the slot
@@ -29,12 +30,14 @@ In a Python script:
 """
 import argparse
 import ctypes
+from contextlib import contextmanager
 import errno
 import fcntl
 import os
 import random
 import re
 import subprocess
+import stat
 import sys
 import time
 from pathlib import Path
@@ -52,6 +55,27 @@ _PROC_FLAG_INEXIT = 4   # sys/proc_info.h: pbi_flags, not the pbi_status enum
 
 class Preempted(Exception):
     """The user's game wants the slot: do not start (or stop) this test and run it again later."""
+
+
+@contextmanager
+def preemption_guard(directory):
+    """Hold across fresh holder/PID/start reads AND the actual signal.
+
+    Busy raises BlockingIOError before the body runs. A physical player retains
+    this same flock in the native runtime until exit. Never unlink or rotate it.
+    Guarding check() alone cannot protect an unguarded caller's later terminate().
+    """
+    path=Path(directory)/"preemption.lock"
+    fd=os.open(path,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC,0o600)
+    try:
+        info=os.fstat(fd);current=path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_nlink!=1
+                or (info.st_dev,info.st_ino)!=(current.st_dev,current.st_ino)):
+            raise OSError(errno.EINVAL,"Expected a stable same-user regular preemption guard")
+        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        yield fd
+    finally:
+        os.close(fd)
 
 
 def pid_start(pid):
@@ -75,7 +99,7 @@ def pid_path(pid):
     return buf.value.decode(errors="replace") if _libproc.proc_pidpath(pid, buf, 4096) > 0 else ""
 
 
-APP_GAMES = ("TOTK", "BotW", "Bananza", "Pokopia", "OcarinaOfTime")   # <App>/Contents/MacOS/<name>: the Mac apps' games
+APP_GAMES = ("TOTK", "BotW", "Bananza", "Pokopia", "OcarinaOfTime", "KokiriGame")   # packaged games
                                                                       # (build_app.py APPS; games/oot/build.py)
 
 

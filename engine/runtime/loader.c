@@ -628,6 +628,9 @@ int main(int argc,char **argv) {
  need(argc==3||(argc>3&&!strcmp(argv[2],"pipeline-archive"))||((argc==4||argc==5)&&!strcmp(argv[2],"seed-shaders")),"usage: totk-native rewritten-dir probe|boot (pipeline-archive <list>... | seed-shaders <corpus> [<shader list>])");
  /* One game or GPU probe at a time (memory, GPU time): wait for the slot before anything is loaded. */
  if(!strcmp(argv[2],"boot")||!strncmp(argv[2],"probe-gpu",9)||!strcmp(argv[2],"seed-shaders"))runtime_game_slot_acquire(argv[2]);
+#if defined(GAME_OOT) && !TARGET_OS_IPHONE
+ if(!strcmp(argv[2],"boot")){extern void runtime_kokiri_development_slot_acquired(void) __attribute__((weak_import));if(runtime_kokiri_development_slot_acquired)runtime_kokiri_development_slot_acquired();}
+#endif
  if(strcmp(argv[2],"boot"))setenv("TOTK_PROBE_GPU","1",1);   /* standalone probes submit GPU work; the game does not unless TOTK_GPU_ALLOW_SUBMIT=1 */
  else unsetenv("TOTK_PROBE_GPU");need(sysconf(_SC_PAGESIZE)==0x4000,"expected 16KB Apple pages");
  struct sigaction a={0};a.sa_sigaction=crash;a.sa_flags=SA_SIGINFO|SA_ONSTACK;sigemptyset(&a.sa_mask);
