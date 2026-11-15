@@ -147,6 +147,13 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
     observed_compiled = sum(library_covered(name, digest) for name, digest in observed_sources.items())
     if observed_compiled != len(observed_sources):
         errors.append('Metal libraries do not cover every observed specialization')
+    required_library_hashes = {digest for digest in (*seed_sources.values(), *observed_sources.values())
+                               if isinstance(digest, str) and DIGEST.fullmatch(digest)}
+    unique_prepared_files = sum(
+        DIGEST.fullmatch(str(library_files.get(digest + '.metallib', ''))) is not None
+        for digest in required_library_hashes)
+    if unique_prepared_files != len(required_library_hashes):
+        errors.append('Metal library files do not cover every unique requested source hash')
     for field in ARTIFACT_FIELDS:
         if not DIGEST.fullmatch(str(artifact_sha256.get(field, ''))):
             errors.append('missing artifact SHA-256: ' + field)
@@ -184,7 +191,11 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
                                   failed=_difference(listed_requested, listed_completed)),
                       unique_completed=variants_completed),
         libraries=dict(requested=len(seed_sources), completed=compiled,
-                       failed=len(seed_sources) - compiled, files=len(library_files)),
+                       failed=len(seed_sources) - compiled, files=len(library_files),
+                       count_basis='seed variant source coverage; not unique library files',
+                       unique_requested_files=len(required_library_hashes),
+                       unique_prepared_files=unique_prepared_files,
+                       retained_library_files=len(library_files)),
         pipelines=dict(requested=pipeline_requested, completed=completed,
                        failed=counts['failed'], write_failed=counts['write_failed'],
                        unaccounted=_difference(pipeline_requested, completed),

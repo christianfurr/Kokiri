@@ -59,6 +59,36 @@ class PreparationReceiptTests(unittest.TestCase):
         self.assertEqual(result['artifact_sha256'], self.artifacts)
         self.assertIn('unobserved', result['limitation'])
 
+    def test_shared_msl_hash_counts_source_coverage_and_unique_files_separately(self):
+        self.seed.update(shaders=2, listed_asked=0, listed_variants=0,
+                         files={'first_b.metal': '1' * 64, 'second_b.metal': '1' * 64})
+        self.libraries['sources'] = copy.deepcopy(self.seed['files'])
+        self.libraries['files'] = {'1' * 64 + '.metallib': 'e' * 64}
+        counts = receipt.require_prepared(self.make())['libraries']
+        self.assertEqual((counts['requested'], counts['completed']), (2, 2))
+        self.assertEqual((counts['unique_requested_files'], counts['unique_prepared_files']), (1, 1))
+        self.assertEqual(counts['retained_library_files'], 1)
+        self.assertEqual(counts['count_basis'], 'seed variant source coverage; not unique library files')
+
+    def test_retained_library_files_do_not_inflate_requested_or_prepared_files(self):
+        self.libraries['files']['9' * 64 + '.metallib'] = 'd' * 64
+        counts = receipt.require_prepared(self.make())['libraries']
+        self.assertEqual((counts['unique_requested_files'], counts['unique_prepared_files']), (3, 3))
+        self.assertEqual(counts['retained_library_files'], 4)
+        self.assertEqual(counts['files'], 4)
+
+    def test_unique_library_counts_include_observed_sources(self):
+        self.add_observed_cache()
+        counts = receipt.require_prepared(self.make())['libraries']
+        self.assertEqual((counts['unique_requested_files'], counts['unique_prepared_files']), (4, 4))
+        self.assertEqual(counts['requested'], 3)
+
+    def test_missing_unique_library_file_blocks_preparation(self):
+        self.libraries['files'].pop('3' * 64 + '.metallib')
+        result = self.reject('do not cover every unique requested source hash')
+        self.assertEqual(result['libraries']['unique_requested_files'], 3)
+        self.assertEqual(result['libraries']['unique_prepared_files'], 2)
+
     def add_observed_cache(self):
         digest = '4' * 64
         name = digest + '.metal'
