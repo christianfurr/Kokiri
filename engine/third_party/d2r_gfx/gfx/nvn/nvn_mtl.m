@@ -7501,11 +7501,29 @@ static void pso_user_record(const char *fmt, ...) {
     if (kind >= 0 && [g_pso_shipped_seen containsObject:k]) kind = -1;   // from the shared list (and its archive): not new
     if (kind >= 0) { atomic_fetch_add(&g_collect_new[kind], 1); atomic_store(&g_collect_last_ns, clock_gettime_nsec_np(CLOCK_UPTIME_RAW)); }
 }
+/* Set only by the offline archive CLI, before initialization or worker dispatch.
+   Gameplay never reads KOKIRI_ARCHIVE_VERIFY_ONLY and keeps the zero default. */
+static int g_archive_verify_only;
+static _Atomic uint64_t g_archive_verify_jit_attempts, g_archive_verify_misses;
+static _Atomic uint64_t g_archive_verify_write_attempts, g_archive_files_opened;
+static NSString *g_archive_library_dir;                 // immutable CPU metadata, no GPU objects
+static NSDictionary<NSString *, NSString *> *g_archive_library_files;
+static NSError *archive_verify_error(NSString *message) {
+    return [NSError errorWithDomain:@"KokiriArchiveVerification" code:1
+                          userInfo:@{NSLocalizedDescriptionKey: message}];
+}
+#include "nvn_archive_library_snapshot.h"
 // 从 .metallib 文件建库，不常驻占文件描述符：newLibraryWithURL 在库对象活着期间一直开着那个文件（每个游戏着色器一个——iOS 包进局常驻 258 个描述符里 213 个是它，
 // 而 iOS 进程缺省软上限 256；别的幕新建着色器还会涨）。这里把文件映射进内存后立刻关掉，用内存数据建库；映射随库的数据对象释放时解除
 // Build the library from a .metallib file without permanently occupying a file descriptor: newLibraryWithURL keeps that file open for as long as the library object lives (one per game shader - of the 258 descriptors the iOS app permanently holds in a run, 213 are these,
 // while the default soft limit of an iOS process is 256; new shaders created in other acts raise it further). Here the file is mapped into memory and closed immediately, and the library is built from the in-memory data; the mapping is released when the library's data object is freed
 static id<MTLLibrary> lib_from_file(NSString *path, NSError **err) {
+    if (g_archive_verify_only) {
+        int source_payload = 0;
+        dispatch_data_t bytes = archive_library_snapshot(path, g_archive_library_dir, g_archive_library_files, err, &source_payload);
+        if (source_payload) atomic_fetch_add(&g_archive_verify_jit_attempts, 1);
+        return bytes ? [g_dev newLibraryWithData:bytes error:err] : nil;
+    }
     int fd = open(path.fileSystemRepresentation, O_RDONLY); struct stat st;
     if (fd < 0) {   // not a file: the seed's image (totk_seed_image.h), whose part stays open; only this file's pages are mapped, and copied at once
         int open_errno = errno; NSData *img = totk_rt_read(path);
@@ -7587,6 +7605,11 @@ static NSString *msl_fix_depth_gather(NSString *src) {
 }
 #include "nvn_umul_diagnostic.h"
 static id<MTLLibrary> totk_msl_library(NSString *source, NSError **err) {
+    if (g_archive_verify_only) {
+        atomic_fetch_add(&g_archive_verify_jit_attempts, 1);
+        if (err) *err = archive_verify_error(@"archive verification requires a prepared translated library; JIT is forbidden");
+        return nil;
+    }
     NSError *e = nil;
     NSString *src = oot_umul_diagnostic_source(msl_fix_depth_gather(source));
     for (int attempt = 1;; attempt++) {
@@ -7644,9 +7667,9 @@ static id<MTLLibrary> variant_library_seed(NSData *raw) {
 }
 static id<MTLLibrary> variant_library_build(NSString *src, NSError **err) {
     NSData *raw = [src dataUsingEncoding:NSUTF8StringEncoding];
-    id<MTLLibrary> pre = shader_device_libs() ? variant_library_seed(raw) : nil;
+    id<MTLLibrary> pre = !g_archive_verify_only && shader_device_libs() ? variant_library_seed(raw) : nil;
 #if !TARGET_OS_IPHONE
-    if (!pre && !shader_device_libs() && raw) pre = shader_lib_prebuilt(raw);   // compiled into the app from an earlier run's record
+    if (!pre && (g_archive_verify_only || !shader_device_libs()) && raw) pre = shader_lib_prebuilt(raw);   // compiled into the app from an earlier run's record
 #endif
     if (pre) { atomic_fetch_add_explicit(&g_stat_variant_pre, 1, memory_order_relaxed); return pre; }
     uint64_t t0 = bp_now(); id<MTLLibrary> lib = totk_msl_library(src, err);
@@ -7882,7 +7905,7 @@ static NvShader *shader_load_mode(NSString *pc, int stage, int archive_compute) 
         /* TOTK_SHADER_DEVICE_LIBS=1 (Mac, tools): load the seed's prebuilt .metallib files the way iOS does, e.g. the iOS
            seed, so the pipelines made here describe the very libraries an iPhone loads (pipeline archives built on the
            Mac for an iPhone GPU with metal-tt). */
-        if (shader_device_libs())
+        if (!g_archive_verify_only && shader_device_libs())
 #endif
         {
         // iOS: the variant precompiled on the Mac (ios/tools/build_metallibs.sh, same options) if it came in shaders.pack
@@ -7895,7 +7918,8 @@ static NvShader *shader_load_mode(NSString *pc, int stage, int archive_compute) 
 #endif
                     NSString *src = raw && !lib ? [[NSString alloc] initWithData:raw encoding:NSUTF8StringEncoding] : nil;
                     if (src) { lib = totk_msl_library(src, &e); atomic_fetch_add(&g_rt_compiled, 1); } }
-    } else lib = lib_from_file(lp, &e);
+    } else if (!g_archive_verify_only) lib = lib_from_file(lp, &e);
+    else e = archive_verify_error(@"archive verification cannot identify a host library without the exact translated MSL");
     if (rt) { uint64_t pre = atomic_load(&g_rt_prebuilt), com = atomic_load(&g_rt_compiled);
               if ((pre + com) % 200 == 1) MLOG("着色器库：预编译加载 %llu 个，现编 %llu 个", (unsigned long long)pre, (unsigned long long)com); }
     NSData *jd = rt ? totk_rt_read(totk_rt_file([pc stringByAppendingString:@".json"])) : [NSData dataWithContentsOfFile:[NSString stringWithFormat:@"%@/%@.json", g_msl_dir, pc]];
@@ -7944,7 +7968,7 @@ static NvShader *shader_load_mode(NSString *pc, int stage, int archive_compute) 
        ended here before (user: "坏了 就重新翻译 不能奔溃"). */
     if (!o->fn) {
         MLOG("【红】着色器 %s 的库里没有入口 %s（源文件可能没写完）：不加载，下次用到时重新翻译", o->key, [[j[@"entry"] description] UTF8String]);
-        if (rt) totk_rt_variant_broken(pc);
+        if (rt && !g_archive_verify_only) totk_rt_variant_broken(pc);
         return nil;
     }
     /* HDR / EDR (PR #1129, Mac 1.4.3): the scene compose and the post shader get an HDR twin (hdr_fn) next to the shipped
@@ -7970,7 +7994,7 @@ static NvShader *shader_load_mode(NSString *pc, int stage, int archive_compute) 
         o->arg_len = o->ae.encodedLength;
         if (o->arg_len != (NSUInteger)(8 * (max_aid + 1)) || (o->arg_len & 7)) {
             MLOG("【红】着色器 %s 参数块布局异常：encodedLength=%lu maxAid=%d：不加载，下次用到时重新翻译", o->key, (unsigned long)o->arg_len, max_aid);
-            if (rt) totk_rt_variant_broken(pc);
+            if (rt && !g_archive_verify_only) totk_rt_variant_broken(pc);
             return nil;
         }
     }
@@ -10388,9 +10412,13 @@ static id<MTLRenderPipelineState> pso_new(MTLRenderPipelineDescriptor *d, NSStri
         ps = [g_dev newRenderPipelineStateWithDescriptor:d options:MTLPipelineOptionFailOnBinaryArchiveMiss reflection:nil error:nil];
         par_pre_note(ps != nil);
         if (ps) { par_count(1); return ps; }
-        par_miss_note("miss", key, d);
-        par_stale(key);
-    } else par_miss_note(atomic_load(&par_filling) ? "fill" : "nofile", key, d);
+        if (!g_archive_verify_only) { par_miss_note("miss", key, d); par_stale(key); }
+    } else if (!g_archive_verify_only) par_miss_note(atomic_load(&par_filling) ? "fill" : "nofile", key, d);
+    if (g_archive_verify_only) {
+        atomic_fetch_add(&g_archive_verify_misses, 1);
+        if (e) *e = archive_verify_error(@"render descriptor is absent from its archive; compilation is forbidden");
+        return nil;
+    }
     if (key && g_par_on) par_count(0);
     ps = [g_dev newRenderPipelineStateWithDescriptor:d error:e];
     if (ps) par_add(g_dev, key, d);
@@ -10411,7 +10439,12 @@ static id<MTLComputePipelineState> cs_new_(NvShader *cs, MTLComputePipelineDescr
         par_pre_note(ps != nil);
         if (ps) { atomic_fetch_add(par_last_pre?&g_compute_bundle_hits:&g_compute_device_hits,1); par_count(1); return ps; }
         d.binaryArchives = nil;
-        par_stale(key);
+        if (!g_archive_verify_only) par_stale(key);
+    }
+    if (g_archive_verify_only) {
+        atomic_fetch_add(&g_archive_verify_misses, 1);
+        if (e) *e = archive_verify_error(@"compute descriptor is absent from its archive; compilation is forbidden");
+        return nil;
     }
     atomic_fetch_add(&g_compute_misses,1);
     if (g_par_on) par_count(0);
@@ -11784,15 +11817,75 @@ static void offline_depth_mode(const char *depth) {
    TOTK_PIPELINE_ARCHIVE_HOST=1, run from the app's own build folder, makes them from the libraries the Mac game loads
    itself (shader-libs, shader_lib_prebuilt) in files of the Mac's size; they are this Mac's GPU code already, so they go
    into the app as they are. The JSON names the GPU architecture the files are for. */
+/* Counts are successful descriptors, including archive hits, not newly compiled
+   pipelines. A denied write attempt also makes archive_writes nonzero. */
+static int archive_tool_report(NSString *manifest_sha, NSString *context_sha, int context_schema, NSError *failure) {
+    if (failure) { g_fill_last.failed++; fprintf(stderr, "[pipeline-archive] %s\n", failure.localizedDescription.UTF8String); }
+    uint64_t jit = atomic_load(&g_archive_verify_jit_attempts), misses = atomic_load(&g_archive_verify_misses);
+    uint64_t writes = atomic_load(&g_par_files) + atomic_load(&g_archive_verify_write_attempts);
+    uint64_t rows = g_fill_last.render + g_fill_last.compute + g_fill_last.mesh + g_fill_last.have;
+    printf("{\"render\": %llu, \"compute\": %llu, \"mesh\": %llu, \"kept\": %llu, \"failed\": %llu, \"seconds\": %.1f, \"write_failed\": %llu, \"arch\": \"%s\", "
+           "\"verify_only\": %s, \"library_jit_attempts\": %llu, \"archive_misses\": %llu, \"archive_writes\": %llu, \"verified_rows\": %llu, \"archive_files_opened\": %llu, "
+           "\"libraries_manifest_sha256\": \"%s\", \"compiler_context_sha256\": \"%s\", \"compiler_context_schema\": %d}\n",
+           g_fill_last.render, g_fill_last.compute, g_fill_last.mesh, g_fill_last.have, g_fill_last.failed, g_fill_last.seconds,
+           (unsigned long long)atomic_load(&g_par_write_failed), g_dev.architecture.name.UTF8String ?: "",
+           g_archive_verify_only ? "true" : "false", (unsigned long long)jit, (unsigned long long)misses,
+           (unsigned long long)writes, (unsigned long long)rows, (unsigned long long)atomic_load(&g_archive_files_opened),
+           manifest_sha.UTF8String ?: "", context_sha.UTF8String ?: "", context_schema);
+    fflush(stdout);
+    return failure || atomic_load(&g_par_write_failed) || g_fill_last.failed ||
+           (g_archive_verify_only && (jit || misses || writes)) ? 1 : 0;
+}
 int mtl_pipeline_archive_tool(int argc, char **argv) {
+    const char *verify = getenv("KOKIRI_ARCHIVE_VERIFY_ONLY");
+    g_archive_verify_only = verify && !strcmp(verify, "1");   // the only environment read of this switch
+    NSString *manifest_sha = @"", *context_sha = @""; int context_schema = 0;
+    if (verify && *verify && strcmp(verify, "0") && strcmp(verify, "1"))
+        return archive_tool_report(manifest_sha, context_sha, context_schema, archive_verify_error(@"KOKIRI_ARCHIVE_VERIFY_ONLY must be 0 or 1"));
     g_compute_archive_tool=1;
-    if (argc < 1 || !getenv("TOTK_SHADER_CACHE") || !getenv("TOTK_SHADER_SEED_DIR"))
+    if (argc < 1 || !getenv("TOTK_SHADER_CACHE") || !getenv("TOTK_SHADER_SEED_DIR")) {
+        if (g_archive_verify_only) return archive_tool_report(manifest_sha, context_sha, context_schema,
+            archive_verify_error(@"archive verification requires existing cache, seed and pipeline lists"));
         MDIE("pipeline-archive: TOTK_SHADER_CACHE=<folder> TOTK_SHADER_SEED_DIR=<device seed> totk-native <rewritten> pipeline-archive <list>...");
+    }
+    const char *recheck = getenv("TOTK_PAR_RECHECK");
+    g_par_recheck = g_archive_verify_only || (recheck && !strcmp(recheck, "1"));
+    const char *host = getenv("TOTK_PIPELINE_ARCHIVE_HOST");
+    if (g_archive_verify_only) {
+        if (!(host && !strcmp(host, "1")) || shader_device_libs())
+            return archive_tool_report(manifest_sha, context_sha, context_schema,
+                archive_verify_error(@"archive verification requires normal host shader libraries"));
+        /* Read the actual directory shader_lib_prebuilt opens, not an intended
+           input identity echoed from a builder-provided digest. */
+        g_archive_library_dir = exe_rel("shader-libs").stringByStandardizingPath.stringByResolvingSymlinksInPath;
+        NSData *raw = [NSData dataWithContentsOfFile:[g_archive_library_dir stringByAppendingPathComponent:@"libraries-manifest.json"]];
+        NSDictionary *metadata = raw ? [NSJSONSerialization JSONObjectWithData:raw options:0 error:nil] : nil;
+        if (![metadata isKindOfClass:NSDictionary.class] || ![metadata[@"files"] isKindOfClass:NSDictionary.class] || ![metadata[@"files"] count])
+            return archive_tool_report(manifest_sha, context_sha, context_schema, archive_verify_error(@"archive verification has no valid actual host library manifest"));
+        id schema = metadata[@"compiler_context_schema"], context = metadata[@"compiler_context_sha256"];
+        if (![schema isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)schema) != CFNumberGetTypeID() ||
+            CFNumberIsFloatType((__bridge CFNumberRef)schema) || [schema longLongValue] != 2 ||
+            ![context isKindOfClass:NSString.class] || [context length] != 64 ||
+            [context rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet]].location != NSNotFound)
+            return archive_tool_report(manifest_sha, context_sha, context_schema, archive_verify_error(@"archive verification requires a schema 2 actual host compiler context"));
+        uint8_t digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(raw.bytes, (CC_LONG)raw.length, digest);
+        NSMutableString *hash = [NSMutableString stringWithCapacity:64];
+        for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) [hash appendFormat:@"%02x", digest[i]];
+        manifest_sha = hash; context_sha = context; context_schema = 2;
+        g_archive_library_files = [metadata[@"files"] copy];
+        NSError *error = nil;
+        if (!totk_rt_set_archive_verify_only(&error))
+            return archive_tool_report(manifest_sha, context_sha, context_schema, error ?: archive_verify_error(@"read-only shader-cache initialization failed"));
+    }
     NSData *seedManifest = [NSData dataWithContentsOfFile:[@(getenv("TOTK_SHADER_SEED_DIR")) stringByAppendingPathComponent:@"seed-manifest.json"]];
     NSDictionary *seedMetadata = seedManifest ? [NSJSONSerialization JSONObjectWithData:seedManifest options:0 error:nil] : nil;
+    if (g_archive_verify_only) {
+        id depth = [seedMetadata isKindOfClass:NSDictionary.class] ? seedMetadata[@"nvn_depth_mode"] : nil;
+        if (![depth isKindOfClass:NSString.class] || (![depth isEqualToString:@"minus-w"] && ![depth isEqualToString:@"zero"]))
+            return archive_tool_report(manifest_sha, context_sha, context_schema, archive_verify_error(@"archive verification requires an explicit valid seed depth mode"));
+    }
     if ([seedMetadata isKindOfClass:NSDictionary.class] && seedMetadata[@"nvn_depth_mode"])
         offline_depth_mode([seedMetadata[@"nvn_depth_mode"] isKindOfClass:NSString.class] ? [seedMetadata[@"nvn_depth_mode"] UTF8String] : NULL);
-    const char *host = getenv("TOTK_PIPELINE_ARCHIVE_HOST");
     /* Both on warm_threads() threads (8 on an M4; TOTK_WARM_THREADS=1 for one). The device's libraries went one at a time
        until 2026-11-01: Breath of the Wild 1.6.0's two runs for an iPad took 332 s + 187 s, on 8 threads 62 s + 49 s, with
        the same 248 recorded variants and the second run's 30,077 files byte for byte the same (the first run's pipelines
@@ -11802,26 +11895,27 @@ int mtl_pipeline_archive_tool(int argc, char **argv) {
     setenv("TOTK_PIPELINE_PREBUILT", "0", 1); unsetenv("TOTK_PIPELINE_ARCHIVE");
     mtl_init();
     par_open_dir(g_dev);
-    if (!g_par_on) MDIE("pipeline-archive: the pipeline archive is off");
+    if (!g_par_on) {
+        if (g_archive_verify_only) return archive_tool_report(manifest_sha, context_sha, context_schema,
+            archive_verify_error(@"archive verification requires an existing archive of this OS, GPU and chain"));
+        MDIE("pipeline-archive: the pipeline archive is off");
+    }
     NSMutableArray<NSString *> *lists = [NSMutableArray array];
     for (int i = 0; i < argc; i++) {
-        if (![NSFileManager.defaultManager isReadableFileAtPath:@(argv[i])]) MDIE("pipeline-archive: cannot read %s", argv[i]);
+        if (![NSFileManager.defaultManager isReadableFileAtPath:@(argv[i])]) {
+            if (g_archive_verify_only) return archive_tool_report(manifest_sha, context_sha, context_schema, archive_verify_error(@"archive verification cannot read a requested pipeline list"));
+            MDIE("pipeline-archive: cannot read %s", argv[i]);
+        }
         [lists addObject:@(argv[i])];
     }
-    const char *recheck = getenv("TOTK_PAR_RECHECK");
-    g_par_recheck = recheck && !strcmp(recheck, "1");
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
     warm_fill_archive(lists, done); dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
-    if (g_par_recheck) {
+    if (g_par_recheck && !g_archive_verify_only) {
         NSUInteger pruned = par_prune_superseded();
         MLOG("管线存档：按这个运行时核对，%llu 条和存档里的不一样，重新编进新文件；删掉被完全取代或清单里已没有的旧文件 %lu 个",
              (unsigned long long)atomic_load(&g_par_stale), (unsigned long)pruned);
     }
-    printf("{\"render\": %llu, \"compute\": %llu, \"mesh\": %llu, \"kept\": %llu, \"failed\": %llu, \"seconds\": %.1f, \"write_failed\": %llu, \"arch\": \"%s\"}\n",
-           g_fill_last.render, g_fill_last.compute, g_fill_last.mesh, g_fill_last.have, g_fill_last.failed, g_fill_last.seconds, (unsigned long long)atomic_load(&g_par_write_failed),
-           g_dev.architecture.name.UTF8String ?: "");
-    fflush(stdout);
-    return atomic_load(&g_par_write_failed) || g_fill_last.failed ? 1 : 0;
+    return archive_tool_report(manifest_sha, context_sha, context_schema, nil);
 }
 #endif
 static void warm_start(void) {

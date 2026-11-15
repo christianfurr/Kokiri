@@ -81,7 +81,7 @@ static BOOL totk_seed_clone_folder(NSString *source, NSString *cache, NSSet<NSSt
 // phone); set by the runtime (totk_shader_rt.m), nil in tests.
 static void (*totk_seed_progress)(int pass, NSUInteger done, NSUInteger total);
 // marker: a receipt in the cache that skips re-importing the same files; nil imports every time (fill packs).
-static NSDictionary *totk_seed_import_into(NSString *source, NSString *cache, NSString *marker, NSError **error) {
+static NSDictionary *totk_seed_import_into(NSString *source, NSString *cache, NSString *marker, NSError **error, BOOL read_only) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *manifestPath = [source stringByAppendingPathComponent:@"seed-manifest.json"];
     if (![fm fileExistsAtPath:manifestPath]) return @{@"available": @NO}; // development/older bundles
@@ -104,12 +104,20 @@ static NSDictionary *totk_seed_import_into(NSString *source, NSString *cache, NS
         // (totk_shader_rt.m shader_scope), so it is never copied into the writable cache.
         NSString *const scopeName = @"shader-keys.json";
         BOOL installed = [old isKindOfClass:NSDictionary.class] && [old[@"files_sha256"] isEqual:fingerprint];   // receipts from before 2026-10-18 (manifest_sha256) are checked once more
-        BOOL sealed = marker && totk_seed_sealed(source);
+        BOOL sealed = read_only || (marker && totk_seed_sealed(source));
         for (id name in names) {
             if (![name isKindOfClass:NSString.class] || ![safe numberOfMatchesInString:name options:0 range:NSMakeRange(0, [name length])]) {
                 problem = @"Unsafe startup shader seed filename"; goto fail;
             }
             if (!sealed && ![name isEqualToString:scopeName] && ![fm fileExistsAtPath:[cache stringByAppendingPathComponent:name]]) installed = NO;
+        }
+        if (read_only) {
+            BOOL directory = NO;
+            if (![fm fileExistsAtPath:cache isDirectory:&directory] || !directory) {
+                problem = @"Archive verification requires an existing shader cache directory"; goto fail;
+            }
+            return @{@"available": @YES, @"shaders": m[@"shaders"], @"imported_files": @0,
+                     @"overlay": names, @"all_default": m[@"all_default"] ?: @NO};
         }
         if (sealed) {   // read in place (see totk_seed_sealed): nothing to check or copy
             if (![fm createDirectoryAtPath:cache withIntermediateDirectories:YES attributes:nil error:error]) return nil;
@@ -205,7 +213,12 @@ fail:
 }
 
 static NSDictionary *totk_seed_import(NSString *source, NSString *cache, NSError **error) {
-    return totk_seed_import_into(source, cache, [cache stringByAppendingPathComponent:@"seed-installed.json"], error);
+    return totk_seed_import_into(source, cache, [cache stringByAppendingPathComponent:@"seed-installed.json"], error, NO);
+}
+/* Only the caller-selected offline archive verifier uses this entry. Never
+   creates the cache, imports a file, or writes an installed-seed receipt. */
+static NSDictionary *totk_seed_import_readonly(NSString *source, NSString *cache, NSError **error) {
+    return totk_seed_import_into(source, cache, nil, error, YES);
 }
 
 // iOS has no translator: ios/tools/fill_shaders.py translates the variants a device missed and pushes them as packs
@@ -219,7 +232,7 @@ static NSDictionary *totk_fill_import(NSString *root, NSString *cache) {
         NSString *pack = [root stringByAppendingPathComponent:name]; BOOL dir = NO;
         if (![fm fileExistsAtPath:pack isDirectory:&dir] || !dir) continue;
         NSError *error = nil;
-        NSDictionary *r = totk_seed_import_into(pack, cache, nil, &error);
+        NSDictionary *r = totk_seed_import_into(pack, cache, nil, &error, NO);
         if (r && [r[@"available"] boolValue]) { merged++; imported += [r[@"imported_files"] unsignedIntegerValue]; }
         else [rejected addObject:[NSString stringWithFormat:@"%@: %@", name, error ? error.localizedDescription : @"no manifest"]];
         [fm removeItemAtPath:pack error:nil];

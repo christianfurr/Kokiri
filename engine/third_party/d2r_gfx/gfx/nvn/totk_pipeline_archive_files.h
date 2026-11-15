@@ -8,7 +8,7 @@ static uint64_t par_load_dir(NSUInteger *files) {
     NSFileManager *fm = NSFileManager.defaultManager;
     g_par_have = [NSMutableSet set]; g_par_where = [NSMutableDictionary dictionary]; g_par_pending = [NSMutableSet set];
     g_par_open = [NSMutableDictionary dictionary]; uint64_t bytes = 0; *files = 0;
-    for (NSString *base in par_pub_scan(par_dir(), par_lock_file(), YES, [NSSet setWithObjects:@"identity.json", @"float-rmw-lowered.txt", nil])) {   // oldest first
+    for (NSString *base in par_pub_scan(par_dir(), par_lock_file(), !g_archive_verify_only, [NSSet setWithObjects:@"identity.json", @"float-rmw-lowered.txt", nil])) {   // oldest first; verification never cleans or creates a lock
         NSString *list = [NSString stringWithContentsOfFile:par_keys_file(base) encoding:NSUTF8StringEncoding error:nil];
         for (NSString *key in [list componentsSeparatedByString:@"\n"]) if (key.length) { [g_par_have addObject:key]; g_par_where[key] = base; }
         bytes += [[fm attributesOfItemAtPath:par_file(base) error:nil] fileSize]; ++*files;
@@ -20,6 +20,7 @@ static uint64_t par_load_dir(NSUInteger *files) {
    have, such as the old keys of shaders a translator change rewrote), are removed, so a package carries no file only
    older runtimes or lists could use. Returns how many. */
 static NSUInteger par_prune_superseded(void) {
+    if (g_archive_verify_only) return 0;
     NSFileManager *fm = NSFileManager.defaultManager; NSUInteger removed = 0;
     for (NSString *name in [fm contentsOfDirectoryAtPath:par_dir() error:nil] ?: @[]) {
         if (![name hasSuffix:@".keys"]) continue;

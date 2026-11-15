@@ -162,7 +162,12 @@ static id<MTLRenderPipelineState> mtk_build(NvShader *ts,NvShader *ms,NvShader *
         id<MTLRenderPipelineState> ps=[g_dev newRenderPipelineStateWithMeshDescriptor:m options:MTLPipelineOptionFailOnBinaryArchiveMiss reflection:nil error:nil];
         par_pre_note(ps!=nil);m.binaryArchives=nil;
         if(ps){par_count(1);atomic_fetch_add(&g_mtk_archive_hits,1);if(from_archive)*from_archive=1;return ps;}
-        par_stale(akey);   // its file holds another description: written again (totk_pipeline_archive.h)
+        if(!g_archive_verify_only)par_stale(akey);   // its file holds another description: written again (totk_pipeline_archive.h)
+    }
+    if(g_archive_verify_only){
+        atomic_fetch_add(&g_archive_verify_misses,1);
+        if(error)*error=archive_verify_error(@"mesh descriptor is absent from its archive; compilation is forbidden");
+        return nil;
     }
     if(akey&&g_par_on){par_count(0);atomic_fetch_add(&g_mtk_archive_misses,1);}
     id<MTLRenderPipelineState> ps=[g_dev newRenderPipelineStateWithMeshDescriptor:m options:MTLPipelineOptionNone reflection:nil error:error];

@@ -56,6 +56,7 @@ int totk_xlate_request(const char *json, char *reply, int size);
 #endif
 static rt_svc g_svc;   // the caller's (the submit thread); background jobs have their own (bg_translate)
 static NSString *g_root, *g_dir;
+static int g_rt_archive_verify_only;   // caller-set before initialization; gameplay default stays zero
 /* iOS: the seed inside the signed app is read where it is instead of being copied into the cache (totk_shader_seed.h
    totk_seed_sealed). Its files are taken from there; the cache holds the rest (fill packs, pso_collected.tsv), and a
    shader's .variants lists of both places are joined. nil on the Mac, where the seed is cloned into the cache. */
@@ -98,7 +99,41 @@ static NSString *seed_dir(void) {   // the prepared startup shaders that come wi
     const char *seedPath = getenv("TOTK_SHADER_SEED_DIR");
     return seedPath ? @(seedPath) : [root_dir() stringByAppendingPathComponent:@"build/shader-seed"];
 }
+BOOL totk_rt_set_archive_verify_only(NSError **error) {
+    NSString *problem = nil;
+    if (g_dir || g_rt_archive_verify_only) problem = @"Archive verification must be selected before shader-cache initialization";
+    const char *cache = getenv("TOTK_SHADER_CACHE");
+    if (!cache || !*cache) problem = @"Archive verification requires an explicit existing shader cache";
+    if (problem) {
+        if (error) *error = [NSError errorWithDomain:@"KokiriArchiveVerification" code:1 userInfo:@{NSLocalizedDescriptionKey: problem}];
+        return NO;
+    }
+    NSString *source = seed_dir();
+    NSDictionary *seed = totk_seed_import_readonly(source, @(cache), error);
+    if (![seed[@"available"] boolValue] || ![seed[@"overlay"] isKindOfClass:NSArray.class]) {
+        if (error && !*error) *error = [NSError errorWithDomain:@"KokiriArchiveVerification" code:1
+            userInfo:@{NSLocalizedDescriptionKey: @"Archive verification requires a valid existing shader seed overlay"}];
+        return NO;
+    }
+    g_dir = @(cache); g_seed_dir = source; g_seed_names = [NSSet setWithArray:seed[@"overlay"]];
+    g_seed_prefix = [source stringByAppendingString:@"/"]; seed_image_open(&g_seed_img, source);
+    g_seed_all_default = [seed[@"all_default"] boolValue];
+    g_rt_archive_verify_only = 1;
+    /* Preserve the normal in-place overlay's preference for earlier repaired
+       translations in the owned cache, without importing or rewriting them. */
+    for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:g_dir error:nil] ?: @[])
+        if ([name hasSuffix:@"_b.metal"] && [g_seed_names containsObject:name]) {
+            seed_mark_broken(name); seed_mark_broken([[name substringToIndex:name.length - 6] stringByAppendingString:@".json"]);
+        }
+    for (NSString *name in g_seed_names) if (!totk_rt_exists(totk_rt_file(name))) {
+        if (error) *error = [NSError errorWithDomain:@"KokiriArchiveVerification" code:1
+            userInfo:@{NSLocalizedDescriptionKey: [@"Archive verification seed overlay is missing: " stringByAppendingString:name]}];
+        return NO;
+    }
+    return YES;
+}
 NSString *totk_rt_dir(void) {
+    if (g_rt_archive_verify_only) return g_dir;
     static dispatch_once_t once;
     // Guest threads may keep their outer pool for the whole run; release import metadata now.
     dispatch_once(&once, ^{ @autoreleasepool {

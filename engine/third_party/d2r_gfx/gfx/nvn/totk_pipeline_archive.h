@@ -190,6 +190,10 @@ static int par_open_identity(id<MTLDevice> dev) {
     NSString *stamp_path = [par_dir() stringByAppendingPathComponent:@"identity.json"];
     NSData *sd = [NSData dataWithContentsOfFile:stamp_path];
     NSDictionary *stamp = sd ? [NSJSONSerialization JSONObjectWithData:sd options:0 error:nil] : nil;
+    if (g_archive_verify_only) {
+        BOOL directory = NO;
+        return [stamp isEqual:par_identity(dev)] && [fm fileExistsAtPath:par_dir() isDirectory:&directory] && directory;
+    }
     [fm removeItemAtPath:[totk_rt_dir() stringByAppendingPathComponent:@"pipelines.metalarchive"] error:nil];   // layouts of earlier tests
     [fm removeItemAtPath:[totk_rt_dir() stringByAppendingPathComponent:@"pipelines.json"] error:nil];
     if (![stamp isEqual:par_identity(dev)] && [fm fileExistsAtPath:par_dir()]) {
@@ -216,7 +220,7 @@ static void par_open_dir(id<MTLDevice> dev) {
         if (!par_enabled()) return;
         /* Only earlier runs' owned folders may be removed. Finish before dispatch_once publishes the archive to any
            writer: batches no longer hold g_par_wmu while Metal uses their build folders. Shared folders stay intact. */
-        par_ga_cleanup_startup();
+        if (!g_archive_verify_only) par_ga_cleanup_startup();
         if (!par_open_identity(dev)) return;
         NSUInteger files = 0; uint64_t bytes = par_load_dir(&files), own = g_par_have.count, pre = par_load_prebuilt(dev);
         g_par_on = 1; g_par_valid = g_par_have.count > 0;
@@ -261,8 +265,8 @@ static id<MTLBinaryArchive> par_archive_for(id<MTLDevice> dev, NSString *key) {
     if (!a && name) {
         MTLBinaryArchiveDescriptor *d = [MTLBinaryArchiveDescriptor new]; d.url = [NSURL fileURLWithPath:pre ? par_pre_file(name) : par_file(name)];
         NSError *e = nil; arch_map_begin(); a = [dev newBinaryArchiveWithDescriptor:d error:&e]; arch_map_end();   // mapped, not read whole, from an external drive (nvn_archive_map.h)
-        if (a) { g_par_open[name] = a; PAR_OPEN_NOTE(name); static int told; if (!told && arch_map_count()) { told = 1; MLOG("管线存档：文件按映射打开（App 在外置盘上也不整份读进内存，nvn_archive_map.h）"); } }
-        else {   // unreadable: its pipelines are compiled again and written to new files (the app's own files stay)
+        if (a) { atomic_fetch_add(&g_archive_files_opened, 1); g_par_open[name] = a; PAR_OPEN_NOTE(name); static int told; if (!told && arch_map_count()) { told = 1; MLOG("管线存档：文件按映射打开（App 在外置盘上也不整份读进内存，nvn_archive_map.h）"); } }
+        else if (!g_archive_verify_only) {   // unreadable: its pipelines are compiled again and written to new files (the app's own files stay)
             for (NSString *k in [g_par_where allKeysForObject:name]) { [g_par_have removeObject:k]; [g_par_where removeObjectForKey:k]; }
             if (pre) [g_par_pre removeObject:name];
             else { [NSFileManager.defaultManager removeItemAtPath:par_file(name) error:nil]; [NSFileManager.defaultManager removeItemAtPath:par_keys_file(name) error:nil]; }
@@ -303,6 +307,7 @@ static NSString *const k_par_batch = @"totk.pipeline-archive.batch";
 static void par_flush_thread(void) {
     NSMutableDictionary *td = NSThread.currentThread.threadDictionary;
     if (!td[k_par_batch]) return;
+    if (g_archive_verify_only) { atomic_fetch_add(&g_archive_verify_write_attempts, 1); return; }
     NSArray<NSString *> *keys = nil; NSString *name = nil; __block NSError *e = nil; BOOL ok = YES; uint64_t t0 = bp_now();
     @autoreleasepool {
         ParBatch *b = td[k_par_batch]; [td removeObjectForKey:k_par_batch];
@@ -332,6 +337,7 @@ static void par_flush_thread(void) {
              (unsigned long long)atomic_load(&g_par_files), (unsigned long long)atomic_load(&g_par_ga_removed));
 }
 static void par_write(id<MTLDevice> dev, NSString *key, id desc) {
+    if (g_archive_verify_only) { atomic_fetch_add(&g_archive_verify_write_attempts, 1); return; }
     pthread_mutex_lock(&g_par_mu);
     if (g_par_recheck) { if (!g_par_used) g_par_used = [NSMutableSet set]; [g_par_used addObject:key]; }
     BOOL skip = [g_par_have containsObject:key] || [g_par_pending containsObject:key];
@@ -372,6 +378,7 @@ static void par_write(id<MTLDevice> dev, NSString *key, id desc) {
    the key (par_load_dir takes a key's newest file). Before 2026-11-11 par_write kept the first, so such a pipeline was
    compiled at every start, and packaging threw the whole archive away whenever the runtime changed. */
 static void par_stale(NSString *key) {
+    if (g_archive_verify_only) return;
     if (!key) return;
     pthread_mutex_lock(&g_par_mu);
     if ([g_par_have containsObject:key] && ![g_par_pending containsObject:key]) {

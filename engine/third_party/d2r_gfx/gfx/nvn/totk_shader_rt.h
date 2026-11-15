@@ -4,6 +4,10 @@
 #import <Foundation/Foundation.h>
 #include <stdint.h>
 NSString *totk_rt_dir(void);
+// Offline archive CLI only, before any cache initialization. Validates the
+// existing cache and seed overlay without creating/importing/writing anything.
+// No inherited environment switch can enable this mode during gameplay.
+BOOL totk_rt_set_archive_verify_only(NSError **error);
 // A file of the translation cache by name: the cache folder, or on iOS the seed inside the app for the files it brings
 // (read in place, never copied). totk_rt_list: every file name of both, sorted.
 NSString *totk_rt_file(NSString *name);
