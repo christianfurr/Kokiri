@@ -1,0 +1,59 @@
+{
+  "verified_at_utc": "2026-11-15T16:41:41.720909+00:00",
+  "sdk": {
+    "distribution": "mcp",
+    "version": "2.3.0",
+    "dependencies": "uv.lock"
+  },
+  "test_command": "/Users/christianfurr/Codex-assistant/apps/Kokiri/tools/kokiri-mcp/.venv/bin/python -m unittest discover -s tests -v",
+  "tests_passed": 26,
+  "protocols_tested": [
+    "2026-07-28",
+    "2025-11-25"
+  ],
+  "stdio_end_to_end": [
+    "tool discovery",
+    "sessions_list",
+    "session_status",
+    "session_logs",
+    "closed-process location rejection",
+    "resource discovery and guide read"
+  ],
+  "native_verification": "libproc self-sample matched C macOS SDK layout for process-start abstime and physical footprint",
+  "mutation_tools_exposed": [],
+  "live_acceptance": {
+    "status": "pending",
+    "native_game_window_capture": "pending",
+    "host_tool_loading": "passed for registered earlier snapshot: five tools available; sessions_list returned []",
+    "candidate_host_loading": "pending integration adoption/reload; registered shared source unchanged",
+    "reserved_native_capture_overwrite": "pending live window capture"
+  },
+  "source_sha256": {
+    "kokiri.py": "86bb581e7b840886508a4aa002b60edabae5d448b8d8aff170d2f317119ce47d",
+    "server.py": "0a41545feacc70f15fb36e3122b6ae0699fd82b9508e0100672bd4a9fc0ddf6e",
+    "pyproject.toml": "e048854acf259cdd7420bed72cd7a00a8334bc7974fa1f0593c929aca199e03e",
+    "uv.lock": "191ed03c8fb7e5479625861623369896ad1daa456d31e66a77e9a989b50f3e66",
+    "plugin.json": "2f029b4176a16d6d1780a32463c7260794174e319e0223a7abea09e6c70db7db",
+    "mcp.json": "f6211a8ce3faff8baa25f36668272b544166a3de283943a1dbe1397cb24e063b",
+    "tests/test_boundaries.py": "425699eea1a0e9b5e81f3e4e00290df6d4f1d1bd23f38b4bdd5617eaa1ce270c",
+    "tests/test_stdio.py": "95b0327b66cbcbecbdbef6f291c2095501687b591c7abc35835442c1248b6c47"
+  },
+  "limits": {
+    "metadata_bytes": 65536,
+    "tail_bytes_per_file": 262144,
+    "tail_lines": 200,
+    "screenshot_bytes": 8388608,
+    "captures_per_session": 64,
+    "listed_sessions": 128
+  },
+  "notes": [
+    "No game or GPU test was launched during fixture verification.",
+    "No public network listener or account plugin was created.",
+    "Tests do not certify gameplay performance or shader coverage.",
+    "FIFO opens reject nonregular files without waiting for peers.",
+    "Concurrent pending captures count toward the64-file limit in this server process.",
+    "Async replies/captures pin the original PID/executable/start/UUID.",
+    "No immediate-before configuration snapshot survives; historical preservation remains unproven."
+  ],
+  "test_elapsed_seconds": 1.252
+}

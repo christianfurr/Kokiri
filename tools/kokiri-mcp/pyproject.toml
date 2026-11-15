@@ -1,7 +1,7 @@
 [project]
 name = "kokiri-mcp"
 version = "0.1.0"
-description = "Local Kokiri session observation and disposable-test tools"
+description = "Local Kokiri session observation tools"
 requires-python = ">=3.12"
 dependencies = ["mcp==2.3.0"]
 
