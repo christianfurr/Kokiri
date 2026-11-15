@@ -6,7 +6,7 @@ import Sparkle
 @MainActor final class UpdateService: ObservableObject {
     @Published private(set) var configured = false
     @Published private(set) var canCheck = false
-    @Published private(set) var status = "Signed updates are not configured in this build."
+    @Published private(set) var status = "Signed launcher updates are not configured in this build."
     private var controller: SPUStandardUpdaterController?
     private var observation: AnyCancellable?
 
@@ -20,7 +20,7 @@ import Sparkle
         do {
             try controller.updater.start()
             self.controller = controller; configured = true
-            status = "Signed appcasts and update archives are verified before installation."
+            status = "Launcher updates require signed feeds and archives. Game runtime updates use a separate local build."
             observation = controller.updater.publisher(for: \.canCheckForUpdates).receive(on: RunLoop.main)
                 .sink { [weak self] in self?.canCheck = $0 }
         } catch { status = "Updates unavailable: " + error.localizedDescription }

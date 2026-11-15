@@ -136,9 +136,11 @@ and refuses incompatible workspaces. A translator or shader-chain change may
 require a full build, so this is not a guaranteed quick update. It was inspected
 as source here, not executed by the release tests.
 
-Automatic runtime delivery still needs a separate reviewed integration: a
-signed source-release manifest, revision verification, compatibility and disk
-preflight, a local build using the owner's existing data, validation of the new
-app, and an atomic switch with recovery. Keep that path distinct from shell
-Sparkle updates and never publish generated game code, binaries or shaders.
-No runtime auto-update client or service is implemented by these release scripts.
+The separate [runtime source updater](runtime-updates.md) now implements signed
+source delivery, revision and payload verification, private staged builds from
+the owner's local data, preparation-receipt checks and atomic version selection
+with rollback. Its native UI and production source feed remain unconfigured.
+Fixture tests establish only the documented local behavior; full v28 game
+update/relaunch, compatible shader preparation and production distribution
+still need Integration acceptance. Never publish generated game code, binaries
+or shaders through either update route.
