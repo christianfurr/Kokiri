@@ -181,6 +181,34 @@ def sha(path):
         while data:=f.read(8<<20):h.update(data)
     return h.hexdigest()
 
+def exact_source_commit():
+    result=subprocess.run(['git','-C',GAME.parent,'rev-parse','HEAD'],capture_output=True,text=True)
+    if result.returncode==0:return result.stdout.strip()
+    marker=GAME.parent/'kokiri-source-release.json'
+    if marker.is_file():
+        record=json.loads(marker.read_text())
+        chain=re.search(r'#define DMSH_CHAIN "([^"]+)"\s*/\* game: oot\b',
+                        (GAME/'third_party/d2r_gfx/gfx/nvn/dmsh_chain.h').read_text())[1]
+        commit=record.get('source_commit','')
+        if (record.get('schema')!='kokiri-runtime-source-v1' or record.get('product')!=RUNTIME_BUNDLE_ID or
+            str(record.get('game_update'))!='131072' or record.get('shader_chain')!=chain or
+            not re.fullmatch('[0-9a-f]{40}',commit)):
+            raise ValueError('invalid source-release identity record')
+        return commit   # authenticated by the updater before extraction/build, not a synthetic git HEAD
+    return ''
+
+def paths_overlap(a,b):
+    a,b=Path(a).resolve(),Path(b).resolve()
+    return a==b or a in b.parents or b in a.parents
+
+def validate_staged_paths(app,destination,work):
+    if paths_overlap(app,destination) or paths_overlap(app,work):
+        raise ValueError('staged rebuild must not overlap the original app')
+    original=plistlib.loads((app/'Contents/Info.plist').read_bytes())
+    for key in ('MNGWorkFolder','MNGGameDataFolder'):
+        if original.get(key) and (paths_overlap(original[key],work) or paths_overlap(original[key],destination)):
+            raise ValueError('staged rebuild requires independent copies of the original work and game-data folders')
+
 def _script(name):
     """games/oot/scripts/<name>.py by its path (games/totk/scripts may hold a module of the same name)."""
     import importlib.util
@@ -315,6 +343,8 @@ def resolve_lists(tree, folder, logs, shared=None, mode='full'):
     for path in (title,manifest):
         if not path.is_file():raise ValueError(f'the shader list resolve wrote no {path}; see {log}')
     print(log.read_text().strip(),flush=True)
+    if mode=='full' and any(int(n) for n in re.findall(r'(\d+) the seed cannot build',log.read_text())):
+        raise ValueError('incomplete resolved pipeline lists; see '+str(log))
     return title,manifest
 
 def listed_shader_keys(seed, shared, compute):
@@ -355,7 +385,7 @@ def listed_shader_file(tree, shared):
 def verify_shader_resources(tree, mode='full'):
     """Check every prepared variant/library and bind both manifests into the normal build record."""
     seed,libraries,_=shader_dirs(tree,mode)
-    if not seed.exists():return None   # explicit development packages from before offline preparation
+    if not seed.exists():raise ValueError('missing shader seed; only mode none permits unprepared development packages')
     metadata=json.loads((seed/'seed-manifest.json').read_text())
     chain=re.search(r'#define DMSH_CHAIN "([^"]+)"\s*/\* game: oot\b',(GAME/'third_party/d2r_gfx/gfx/nvn/dmsh_chain.h').read_text())[1]   # the shared layer's line for this game
     imported=imported_romfs(tree)   # the seed is translated from this tree's own RomFS image (#2009: images differ by dump)
@@ -367,7 +397,11 @@ def verify_shader_resources(tree, mode='full'):
         raise ValueError('OOT shader seed is incomplete or belongs to another translation context')
     libs=json.loads((libraries/'libraries-manifest.json').read_text())
     if not libs.get('complete'):raise ValueError('OOT Metal libraries are incomplete')
+    if mode=='full' and (metadata.get('only') is not None or libs.get('subset') or
+                        metadata.get('listed_asked') != metadata.get('listed_variants')):
+        raise ValueError('full shader preparation cannot use subsets or incomplete listed variants')
     if '-fpreserve-invariance' not in libs.get('compiler','').split():raise ValueError('OOT Metal libraries lack position invariance')
+    if '-fwrapv' not in libs.get('compiler','').split():raise ValueError('OOT Metal libraries lack signed-overflow wrapping')
     shared=build_helpers()
     known_seed=shared.seed_digests(seed);known_libs=shared.seed_digests(libraries)
     for name,want in metadata['files'].items():
@@ -440,11 +474,14 @@ def compute_pipeline_archive(work, tree, lists, mode='full'):
     logs=work/'logs';logs.mkdir(exist_ok=True)
     log=logs/'compute-pipelines.log'
     env=dict(os.environ,TOTK_NATIVE_DIR=str(tree/'build'),TOTK_SHADER_CACHE=str(cache),
-             TOTK_SHADER_SEED_DIR=str(seed),TOTK_PIPELINE_ARCHIVE_HOST='1',TOTK_DEBUG_LOG='1',TOTK_PAR_RECHECK='1')
+             TOTK_SHADER_SEED_DIR=str(seed),TOTK_PIPELINE_ARCHIVE_HOST='1',TOTK_DEBUG_LOG='1',TOTK_PAR_RECHECK='1',
+             TOTK_WARM_THREADS=str(shader_jobs()))
     lists_sha256={p.name:sha(p) for p in lists}   # check_archive_lists compares them with the files the App carries
     lists=[p for p in lists if p.is_file() and any(l and not l.startswith('#') for l in p.read_text().splitlines())]
     render_rows=sum(1 for p in lists for l in p.read_text().splitlines() if l.startswith(RENDER_ROWS))
     mesh_rows=sum(1 for p in lists for l in p.read_text().splitlines() if l.startswith(MESH_ROWS))
+    requested=len({line for p in (plan,*lists) for line in p.read_text().splitlines()
+                   if line.startswith(('C\t',*RENDER_ROWS,*MESH_ROWS))})
     print(f'Preparing {len(rows)} compute pipelines, {render_rows} listed render pipelines and {mesh_rows} listed mesh pipelines before packaging',flush=True)
     with GameSlot(owner='build',purpose='OOT offline pipelines',expect_seconds=3600),log.open('w') as f:
         tool=subprocess.run([work/'build/oot-native',tree/'rewritten/oot','pipeline-archive',plan,*lists],
@@ -452,10 +489,9 @@ def compute_pipeline_archive(work, tree, lists, mode='full'):
     reports=[json.loads(line) for line in log.read_text().splitlines() if line.startswith('{"render":')]
     if not reports:raise ValueError(f'pipeline archive exit {tool.returncode} without a completion report; see {log}')
     report=reports[-1]
-    # A listed render row that cannot be built only misses the warm-up (it is built at its draw); every compute pipeline must be there (the index check below).
-    if report['write_failed'] or report['compute']+report['kept']<len(rows) or (report['failed'] and not lists):
+    completed=sum(report[k] for k in ('render','compute','mesh','kept'))
+    if tool.returncode or report['write_failed'] or report['failed'] or completed != requested:
         raise ValueError('incomplete pipeline archive: '+str(report))
-    if report['failed']:print(f"[RED] {report['failed']} listed pipelines were not built; see {log}",flush=True)
     target=tree/f'build/pipelines{suffix}'
     count=build_helpers().mac_pipeline_files(cache/'pipelines',target,report['arch'],chain)
     expected={'c'+hashlib.sha256(row[2:].encode()).hexdigest()[:40]for row in rows}
@@ -465,9 +501,10 @@ def compute_pipeline_archive(work, tree, lists, mode='full'):
     if missing:raise ValueError(missing_compute_message(missing,report['arch'],log))
     mesh_indexed=sum(1 for key in actual if key.startswith(MESH_KEY))
     if mesh_rows and not mesh_indexed:raise ValueError(f'the pipeline archive holds none of the {mesh_rows} listed mesh pipelines; see {log}')
-    if mesh_indexed<mesh_rows:print(f'[RED] {mesh_rows-mesh_indexed} of {mesh_rows} listed mesh pipelines are not in the archive; see {log}',flush=True)
+    if mesh_indexed<mesh_rows:raise ValueError(f'{mesh_rows-mesh_indexed} listed mesh pipelines are not in the archive; see {log}')
     report.update(planned=len(rows),listed_render=render_rows,listed_mesh=mesh_rows,mesh_indexed=mesh_indexed,lists=[p.name for p in lists],lists_sha256=lists_sha256,indexed=count,chain=chain,
                   plan_sha256=sha(plan),runtime_sha256=sha(work/'build/oot-native'),
+                  requested=requested,completed=completed,
                   files={p.name:sha(p)for p in sorted(target.iterdir()) if p.is_file() and p.name!='compute-manifest.json'})
     (target/'compute-manifest.json').write_text(json.dumps(report,indent=2)+'\n')
     return target
@@ -497,7 +534,45 @@ def check_archive_lists(build):
         if report.get(field)!=rows:
             raise ValueError(f"the pipeline archive planned {report.get(field)} listed {what} pipelines, the App's lists name {rows}")
 
-def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=None,mode=None):
+def write_preparation_receipt(work,tree,mode,pipelines):
+    """Bind verified coverage to the exact packaged inputs; never infer readiness from mode alone."""
+    scripts=str(GAME/'scripts')
+    if scripts not in sys.path:sys.path.insert(0,scripts)
+    from preparation_receipt import preparation_receipt,require_prepared
+    seed,libraries,_=shader_dirs(tree,mode)
+    seed_manifest=seed/'seed-manifest.json';library_manifest=libraries/'libraries-manifest.json'
+    metadata=json.loads(seed_manifest.read_text()) if mode!='none' and seed_manifest.is_file() else {}
+    libs=json.loads(library_manifest.read_text()) if mode!='none' and library_manifest.is_file() else {}
+    pipeline_manifest=Path(pipelines)/'compute-manifest.json' if pipelines else None
+    report=json.loads(pipeline_manifest.read_text()) if pipeline_manifest else {}
+    chain=re.search(r'#define DMSH_CHAIN "([^"]+)"\s*/\* game: oot\b',
+                    (GAME/'third_party/d2r_gfx/gfx/nvn/dmsh_chain.h').read_text())[1]
+    artifacts={'runtime_sha256':sha(work/'build/oot-native')}
+    for name,path in [('seed_manifest_sha256',seed_manifest),('libraries_manifest_sha256',library_manifest),
+                      ('pipeline_manifest_sha256',pipeline_manifest),
+                      ('pipeline_index_sha256',Path(pipelines)/f"pipelines-{report['arch']}.tsv" if pipelines else None)]:
+        if path and path.is_file() and mode!='none':artifacts[name]=sha(path)
+    receipt=preparation_receipt(mode,metadata,libs,report,
+        expected_identity=dict(chain=chain,source_romfs_sha256=imported_romfs(tree)['sha256'],
+                               translator_sha256=sha(tree/'build/shader-service/totk_xlate'),nvn_depth_mode='minus-w'),
+        artifact_sha256=artifacts,pipeline_requested=report.get('requested'),source_commit=exact_source_commit())
+    receipt['identity']['runtime_hash_scope']='pre-seal build executable; final signed bytes require an external package fingerprint'
+    record=tree/'build/game-data/oot/preparation-receipt.json';record.parent.mkdir(parents=True,exist_ok=True)
+    record.write_text(json.dumps(receipt,indent=2)+'\n')
+    if mode=='full':require_prepared(receipt)
+    return receipt
+
+def verify_recorded_variant_coverage(libraries,caches):
+    """A final archive recheck must not introduce an unprepared specialization."""
+    sources,_=_script('build_shader_libs').recorded_variants([Path(p)for p in caches])
+    manifest=json.loads((Path(libraries)/'libraries-manifest.json').read_text())
+    for name,source in sources.items():
+        digest=sha(source)
+        if manifest['sources'].get(name)!=digest or digest+'.metallib' not in manifest['files']:
+            raise ValueError('unprepared recorded specialization after pipeline recheck: '+name)
+    return len(sources)
+
+def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=None,mode=None,learned_caches=()):
     """Stage a sealed App containing its runtime data, then replace the closed App. mode: shader_mode, recorded in the
     App (MNGShaders) for its updates and MNG Launcher."""
     mode=mode or shader_mode()
@@ -513,6 +588,16 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
     else:
         lists=resolve_lists(tree,tree/f'build/warm-lists{suffix}',work/'logs',shared,mode)   # identical lists feed archive and App
     pipelines=compute_pipeline_archive(work,tree,lists,mode) if shader_record else None
+    if pipelines:
+        # Archive construction records additional patched MSL. Compile those
+        # exact sources, then verify PSOs against the same libraries play loads.
+        archive_cache=tree/'build/compute-pipelines'/shader_record['chain']
+        if suffix:archive_cache=archive_cache.with_name(archive_cache.name+suffix)
+        compile_shader_libraries(work,tree,mode,shared,learned_caches=(*learned_caches,archive_cache))
+        pipelines=compute_pipeline_archive(work,tree,lists,mode)
+        shader_record=verify_shader_resources(tree,mode)
+        verify_recorded_variant_coverage(shader_dirs(tree,mode)[1],(*learned_caches,archive_cache))
+    receipt=write_preparation_receipt(work,tree,mode,pipelines)
     prepared=shader_bundle(tree,shader_record,mode) if shader_record else None
     opening_overlay=tree/'extracted/oot/opening-patches'
     subprocess.run([sys.executable,GAME/'scripts/make_opening_overlay.py','--romfs',tree/'extracted/oot/romfs',
@@ -523,6 +608,8 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
     clone_file(GAME.parent/'assets/brand/kokiri-mark.png',res/'KokiriMark.png')
     mac.mkdir(parents=True);data.mkdir(parents=True)
     clone_file(work/'build/oot-native',mac/RUNTIME_EXECUTABLE)
+    if sha(mac/RUNTIME_EXECUTABLE)!=receipt['artifact_sha256']['runtime_sha256']:
+        raise ValueError('staged runtime differs from the verified build input')
     if pipelines:shutil.copytree(pipelines,data/'build/pipelines',copy_function=clone_file)
     for rel in ('build/game-data/oot','build/shader-service','extracted/oot/exefs',
                 'extracted/firmware/shared-fonts'):
@@ -560,7 +647,7 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
     # VideoToolbox is the primary AV1 decoder; the bounded dav1d fallback is linked statically (build_app.codec_libraries
     # builds it from its pinned source), so the App carries no dylib for it, only its license.
     clone_file(GAME/'third_party/dav1d-COPYING',res/'licenses/dav1d-COPYING')
-    info=runtime_metadata(mode,build_helpers().source_commit())
+    info=runtime_metadata(mode,exact_source_commit())
     icon=tree/'build/KokiriAppIcon.icns'
     subprocess.run(['bash',GAME.parent/'macos/scripts/create_icon.sh',
                     GAME.parent/'assets/brand/kokiri-mark.png',icon],check=True)
@@ -569,10 +656,13 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
     info['KokiriGameUpdate']='131072'
     info['KokiriProductVersion']=PRODUCT_VERSION
     info['KokiriShaders']=mode
+    info['KokiriPrepared']=receipt['prepared']
+    info['KokiriBuildRuntimeSHA256']=receipt['artifact_sha256']['runtime_sha256']
+    info['KokiriPreparationReceiptSHA256']=sha(tree/'build/game-data/oot/preparation-receipt.json')
     info['MNGShaders']=mode   # shader_mode: 'title' is a quick build, filled in by MNG Launcher's 补全着色器 (update_shaders)
     info['MNGContributionFolder']=str(contrib_folder())   # app/launcher.m contrib_file: where players find it, as build_app.py sets it
     build_app.record_update_source(info,work)   # Settings > Update (#2055): the checkout, the work folder and the Python, as build_app.py records them
-    commit=build_app.source_commit()
+    commit=exact_source_commit()
     info['KokiriSourceCommit']=commit or 'uncommitted'
     if commit:info['MNGSourceCommit']=commit   # the HUD box and the Update page name the commit the app was built from
     (res/'KokiriCatalogContext.json').write_text(json.dumps(context,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\n')
@@ -582,6 +672,15 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
     # The installed .app folder stays and takes the new contents: macOS keeps its first-run check of an app with the folder.
     while app_running(out):time.sleep(5)   # the build may have taken a while: the App is replaced only once it is closed
     build_app.install_app(temporary,out)
+    # Code signing changes the executable's signature bytes. Final byte hashes
+    # live outside the sealed bundle to avoid a circular resource signature.
+    fingerprint=dict(schema='kokiri-package-output-v1',app=str(out),
+                     build_runtime_sha256=receipt['artifact_sha256']['runtime_sha256'],
+                     signed_runtime_sha256=sha(out/'Contents/MacOS'/RUNTIME_EXECUTABLE),
+                     info_sha256=sha(out/'Contents/Info.plist'),
+                     code_resources_sha256=sha(out/'Contents/_CodeSignature/CodeResources'),
+                     preparation_receipt_sha256=sha(out/'Contents/Resources/totk/build/game-data/oot/preparation-receipt.json'))
+    (work/'logs/package-output.json').write_text(json.dumps(fingerprint,indent=2)+'\n')
     return out
 
 def missing_compute(rows,index_ids):
@@ -648,12 +747,18 @@ def update_blocker(work, mode='full'):
         if sha(tree/'rewritten/oot'/name)!=want:return 'rewritten module differs from this repository: run the full build: '+name
     return ''
 
-def update_runtime(app,work=None):
+def update_runtime(app,work=None,out=None,shared=None,learned_caches=()):
     """Put a new runtime into an App this build made, keeping its shaders: rebuild the runtime and its pipeline archive only.
     The translations and Metal libraries of the last full build are reused; a new translation chain, translator or request
     code needs the full build. A running game is waited for, not closed."""
     app=Path(app).resolve();validate_runtime_app(app)
+    destination=Path(out).expanduser().resolve() if out else app
+    if out and destination==app:raise ValueError('staged rebuild output must differ from the source app')
+    if destination.suffix!='.app':raise ValueError('staged rebuild output must end in .app')
+    external_workspace(destination);validate_runtime_app(destination)
     work=external_workspace(work if work else build_helpers().recorded_work_folder(app,'Kokiri-work')[0]);ensure_disk_space(work)   # the app's own record first
+    if out:
+        validate_staged_paths(app,destination,work)
     repo=GAME.parent
     if work==repo or repo in work.parents:raise ValueError('game build data must remain outside the source checkout')
     tree=work/'oot'
@@ -662,8 +767,11 @@ def update_runtime(app,work=None):
     ensure_shader_service(work)
     blocker=update_blocker(work,mode)
     if blocker:raise ValueError(blocker)
+    native=ready_shader_service(work)
+    if sha(tree/'build/shader-service/totk_xlate')!=sha(native/'totk_xlate'):
+        raise ValueError('work shader translator differs from source-verified serviced tool; run the full build')
     told=False
-    while app_running(app):
+    while destination==app and app_running(app):
         if not told:print('waiting for the game to close',flush=True);told=True
         time.sleep(5)
     start=time.monotonic()
@@ -672,17 +780,20 @@ def update_runtime(app,work=None):
     print('building the runtime',flush=True)
     env=dict(os.environ,DM_RULESET='native',DM_PRIVATE_GATES='0')
     with (logs/'native-runtime.log').open('w') as f:
-        subprocess.run(['make','-C',GAME,'WORK='+str(make_path(work)),'-j'+str(os.cpu_count() or 4)],cwd=work,stdout=f,stderr=subprocess.STDOUT,check=True,env=env)
+        subprocess.run(['make','-C',GAME,'WORK='+str(make_path(work)),'-j'+str(shader_jobs())],cwd=work,stdout=f,stderr=subprocess.STDOUT,check=True,env=env)
     def run(cmd,name,cwd=tree):
         print(name,flush=True)
         ensure_disk_space(work)
         with (logs/(name+'.log')).open('w') as f:subprocess.run([str(x)for x in cmd],cwd=cwd,env=env,stdout=f,stderr=subprocess.STDOUT,check=True)
     # The new runtime asks for every translation again: the ones whose request is the same are kept, the others made again
     # (prepare_ns2_seed.py, totk_shader_rt.m seed_verified), and only the libraries whose source changed are compiled.
-    shader_steps(work,tree,logs,run,mode=mode)
+    shader_steps(work,tree,logs,run,mode=mode,shared=shared,learned_caches=learned_caches)
     folder=plistlib.loads((app/'Contents/Info.plist').read_bytes()).get('MNGGameDataFolder')
-    package_app(work,tree,app,'library' if folder else 'app',folder,mode=mode)
-    print(f'updated {app} in {time.monotonic()-start:.0f} s',flush=True)
+    if out and folder:
+        # Staging must never publish into the original player's mutable library.
+        folder=work/'staged-game-data'
+    package_app(work,tree,destination,'library' if folder else 'app',folder,mode=mode,shared=shared,learned_caches=learned_caches)
+    print(f'built {destination} in {time.monotonic()-start:.0f} s',flush=True)
 
 def update_shaders(app,listfile,work=None):
     """Only the shaders and pipelines of an App this build made, from another shared list (shader_update.py: the newest
@@ -720,7 +831,18 @@ def update_shaders(app,listfile,work=None):
     package_app(work,tree,app,'library' if folder else 'app',folder,shared=listfile,mode='full')
     print(f'updated the shaders of {app} in {time.monotonic()-start:.0f} s',flush=True)
 
-def shader_steps(work,tree,logs,run,device=False,shared=None,mode='full'):
+def compile_shader_libraries(work,tree,mode='full',shared=None,learned_caches=()):
+    seed,libraries,_=shader_dirs(tree,mode)
+    subset=shader_subset(tree,shared or GAME/'assets/shader_list.tsv') if mode=='full' else None
+    py=work/'venv/bin/python'
+    if not py.exists():py=Path(sys.executable)
+    cmd=[py,GAME/'scripts/build_shader_libs.py','--cache',seed,'--out',libraries,'--jobs',str(shader_jobs()),
+         *(['--only',subset] if subset else []),
+         *[arg for cache in learned_caches for arg in ('--variant-cache',Path(cache))]]
+    with (work/'logs/compile-shader-libraries.log').open('w') as log:
+        subprocess.run([str(c) for c in cmd],cwd=tree,stdout=log,stderr=subprocess.STDOUT,check=True)
+
+def shader_steps(work,tree,logs,run,device=False,shared=None,mode='full',learned_caches=()):
     """The seed of the full build and of a runtime update: every translation the runtime asks for, a cached one kept when
     the runtime's request for it is the one it was made from (prepare_ns2_seed.py; user 2026-11-11: "如何让 快速更新 不要这么
     容易失效"), and on the Mac the Metal libraries, compiled only where the translation changed (build_shader_libs.py)."""
@@ -729,17 +851,17 @@ def shader_steps(work,tree,logs,run,device=False,shared=None,mode='full'):
     only=title_shader_file(tree,shared) if mode=='title' else None   # a quick build: the title rows' shaders only
     seed,libraries,_=shader_dirs(tree,mode)
     run([py,GAME/'scripts/prepare_ns2_seed.py','--version','oot','--depth-mode','minus-w',
-        '--binary',work/'build/oot-native','--jobs',str(shader_jobs()),'--logs',logs,'--output',seed,
+        '--binary',work/'build/oot-native','--translator',tree/'build/shader-service/totk_xlate',
+        '--jobs',str(shader_jobs()),'--logs',logs,'--output',seed,
         *(['--list',shared] if shared.is_file() else []),*(['--only',only] if only else [])],'prepare-shader-seed')
     if not device:
-        subset=shader_subset(tree,shared) if mode=='full' else None   # OOT_SHADER_SUBSET (test builds); a title seed holds only its shaders
-        run([py,GAME/'scripts/build_shader_libs.py','--cache',seed,
-            '--out',libraries,'--jobs',str(shader_jobs()),*(['--only',subset] if subset else [])],'compile-shader-libraries')
+        compile_shader_libraries(work,tree,mode,shared,learned_caches)
 
 def shader_jobs():
-    """Translation workers and Metal compiles at once: the cores minus two (the runtime's own threads and the Metal
-    compiler service), 8 on this 10-core M4; 4 left most of the machine idle for 9 minutes of translation."""
-    return max(4, min(8, (os.cpu_count() or 4) - 2))
+    """A bounded budget shared by runtime builds, translation, libraries and archives."""
+    jobs=int(os.environ.get('KOKIRI_BUILD_JOBS','2'))
+    if not 1<=jobs<=8:raise ValueError('KOKIRI_BUILD_JOBS must be between 1 and 8')
+    return jobs
 
 def library_image(args,out):
     """The RomFS image an earlier build put in the game library (package_app 'library': <folder>/oot/romfs.bin), to take
@@ -846,11 +968,11 @@ def build(args, source):
     shutil.copy2(proof,service/proof.name)
     shutil.copy2(proof.with_name('SPIRV-Tools.LICENSE'),service/'SPIRV-Tools.LICENSE')
     (tree/'build/shader-map.tsv').write_text('# TOTK control-code-sha256-v1\n')
-    run(['make','-C',GAME,'WORK='+str(make_path(work)),'-j2'],'native-runtime',work)
+    run(['make','-C',GAME,'WORK='+str(make_path(work)),'-j'+str(shader_jobs())],'native-runtime',work)
     mode='full' if device else shader_mode()
     if mode=='none':print('Shaders are not bundled (OOT_BUNDLE_SHADERS=0): translated at first use',flush=True)
     else:
-     shader_steps(work,tree,logs,run,device,mode=mode)
+     shader_steps(work,tree,logs,run,device,mode=mode,shared=getattr(args,'shader_list',None),learned_caches=getattr(args,'learned_cache',()))
     if device:
      # The phone's own Metal libraries and pipeline archive: the seed above is compiled for the device in ios/tools/build_ipa.py.
      run([py,tree/'ios/tools/build_ipa.py','--tree',tree,'--out',out,'--version','oot','--logs',logs,'--app-name','OcarinaOfTime','--bundle-id','org.macnativegames.oot',
@@ -858,7 +980,8 @@ def build(args, source):
          *(['--image-outside'] if args.ios_game_data=='documents' else []),*[x for g in args.device_gpu or [] for x in ('--device-gpu',g)]],'build-ipa')
      remove_device_reminder()
     else:
-     package_app(work,tree,out,'library' if args.mac_game_data_folder else args.mac_game_data,args.mac_game_data_folder,mode=mode)
+     package_app(work,tree,out,'library' if args.mac_game_data_folder else args.mac_game_data,args.mac_game_data_folder,mode=mode,
+                 shared=getattr(args,'shader_list',None),learned_caches=getattr(args,'learned_cache',()))
     print(f'Built {out}; native gameplay validation is recorded separately.',flush=True)
     chain=re.search(r'#define DMSH_CHAIN "([^"]+)"\s*/\* game: oot\b',(GAME/'third_party/d2r_gfx/gfx/nvn/dmsh_chain.h').read_text())[1]   # the shared layer's line for this game
     return out,tree,expected,chain
@@ -869,17 +992,24 @@ def main(argv=None):
     parser.add_argument('source', nargs='?', type=Path, help='owned update 131072 .nup or dump folder')
     parser.add_argument('-o', '--out', type=Path, help='Kokiri Game.app output, outside this repository')
     parser.add_argument('--work', type=Path, help='external workspace for generated game data and tools')
+    parser.add_argument('--jobs',type=int,choices=range(1,9),default=2,help='bounded worker budget (default 2)')
+    parser.add_argument('--shader-list',type=Path,help='explicit merged shader metadata list, including learned pipelines')
+    parser.add_argument('--learned-cache',type=Path,action='append',default=[],help='compatible runtime cache containing patched MSL (repeatable)')
     parser.add_argument('--shared-fonts', type=Path, help='folder of six verified .bfttf fonts and manifest.json')
     parser.add_argument('--mac-game-data', choices=('app', 'library'), default='app')
     parser.add_argument('--mac-game-data-folder', type=Path)
     parser.add_argument('--rebuild', type=Path, metavar='APP', help='rebuild an existing Kokiri runtime app')
     args = parser.parse_args(argv)
+    if args.shader_list:args.shader_list=args.shader_list.expanduser().resolve()
+    args.learned_cache=[p.expanduser().resolve()for p in args.learned_cache]
+    os.environ['KOKIRI_BUILD_JOBS']=str(args.jobs)
     if sys.version_info < (3, 14):
         parser.error('Python 3.14 or later is required')
     if args.rebuild:
-        if args.source or args.out:
-            parser.error('--rebuild cannot be combined with source or --out')
-        update_runtime(args.rebuild, args.work)
+        if args.source:
+            parser.error('--rebuild cannot be combined with source')
+        if args.out and args.work is None:parser.error('staged --rebuild --out requires an independently cloned --work')
+        update_runtime(args.rebuild,args.work,out=args.out,shared=args.shader_list,learned_caches=args.learned_cache)
         return 0
     if args.source is None:
         parser.error('source is required unless --rebuild is given')

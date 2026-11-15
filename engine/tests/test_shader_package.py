@@ -31,12 +31,14 @@ class PackageTests(unittest.TestCase):
         chain=re.search(r'#define DMSH_CHAIN "([^"]+)"\s*/\* game: oot\b',(GAME/'third_party/d2r_gfx/gfx/nvn/dmsh_chain.h').read_text())[1]
         romfs=self.tree/'extracted/oot/romfs';romfs.mkdir(parents=True)   # the image this tree imported names the seed (#2009)
         (romfs/'index.json').write_text(json.dumps(dict(romfs_sha256='d'*64,romfs_size=16,files=[])))
+        translator=self.tree/'build/shader-service/totk_xlate';translator.parent.mkdir(parents=True)
+        translator.write_bytes(b'synthetic translator')
         self.metadata=dict(schema=1,version='oot',source_romfs_sha256='d'*64,
-                           translator_sha256=package.sha(GAME/'prebuilt/macos-arm64/totk_xlate'),
+                           translator_sha256=package.sha(translator),
                            chain=chain,all_default=True,nvn_depth_mode='minus-w',corpus_shaders=1,
                            translated_default=1,shaders=1,files={self.source.name:source_hash})
         (self.seed/'seed-manifest.json').write_text(json.dumps(self.metadata))
-        self.library_metadata=dict(schema=1,complete=True,compiler='synthetic fixture -fpreserve-invariance',
+        self.library_metadata=dict(schema=1,complete=True,compiler='synthetic fixture -fpreserve-invariance -fwrapv',
                                    sources={self.source.name:source_hash},
                                    files={library.name:package.sha(library),self.recorded_library.name:package.sha(self.recorded_library)})
         (self.libs/'libraries-manifest.json').write_text(json.dumps(self.library_metadata))
@@ -53,6 +55,17 @@ class PackageTests(unittest.TestCase):
         self.library_metadata['complete']=False
         (self.libs/'libraries-manifest.json').write_text(json.dumps(self.library_metadata))
         with self.assertRaisesRegex(ValueError,'incomplete'):
+            package.verify_shader_resources(self.tree)
+
+    def test_missing_seed_is_never_a_full_preparation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaisesRegex(ValueError,'missing shader seed'):
+                package.verify_shader_resources(Path(folder))
+
+    def test_full_mode_rejects_subset_libraries(self):
+        self.library_metadata['subset']=True
+        (self.libs/'libraries-manifest.json').write_text(json.dumps(self.library_metadata))
+        with self.assertRaisesRegex(ValueError,'subsets'):
             package.verify_shader_resources(self.tree)
 
     def test_compiler_without_invariance_cannot_be_packaged(self):

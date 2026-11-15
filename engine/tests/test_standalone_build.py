@@ -64,6 +64,36 @@ print('isolated ready and damaged-tool gates passed')
                 build.validate_runtime_app(app)
             self.assertEqual(info.read_bytes(), original)
 
+    def test_staged_rebuild_rejects_overlaps_before_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);app=root/'Original.app';info=app/'Contents/Info.plist';info.parent.mkdir(parents=True)
+            original=plistlib.dumps({'CFBundleIdentifier':build.RUNTIME_BUNDLE_ID,'MNGWorkFolder':str(root/'original-work'),
+                                    'MNGGameDataFolder':str(root/'library')});info.write_bytes(original)
+            for destination,work in [(app/'Contents/Candidate.app',root/'work'),
+                                      (root/'Candidate.app',app/'Contents/work'),
+                                      (root/'Candidate.app',root/'original-work/subdir'),
+                                      (root/'library/Candidate.app',root/'work')]:
+                with patch.object(build,'sync_tree',side_effect=AssertionError('must not sync')), \
+                     patch.object(build,'ensure_shader_service',side_effect=AssertionError('must not build')):
+                    with self.assertRaisesRegex(ValueError,'staged rebuild'):
+                        build.update_runtime(app,work=work,out=destination)
+                self.assertEqual(info.read_bytes(),original)
+
+    def test_release_record_supplies_exact_source_without_git(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);engine=root/'engine';engine.mkdir()
+            chain=engine/'third_party/d2r_gfx/gfx/nvn/dmsh_chain.h';chain.parent.mkdir(parents=True)
+            chain.write_text('#define DMSH_CHAIN "oot-test" /* game: oot */\n')
+            marker=root/'kokiri-source-release.json'
+            record=dict(schema='kokiri-runtime-source-v1',product=build.RUNTIME_BUNDLE_ID,
+                        source_commit='a'*40,game_update=131072,shader_chain='oot-test')
+            marker.write_text(json.dumps(record))
+            with patch.object(build,'GAME',engine),patch.object(build.subprocess,'run',return_value=subprocess.CompletedProcess([],1,'','')):
+                self.assertEqual(build.exact_source_commit(),'a'*40)
+                record['shader_chain']='old-chain';marker.write_text(json.dumps(record))
+                with self.assertRaisesRegex(ValueError,'source-release'):
+                    build.exact_source_commit()
+
     def test_source_checkout_cannot_be_an_output(self):
         for folder in (ENGINE.parent, ENGINE/'build'):
             with self.assertRaises(ValueError):
