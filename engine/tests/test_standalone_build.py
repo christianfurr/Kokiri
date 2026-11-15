@@ -72,6 +72,8 @@ print('isolated ready and damaged-tool gates passed')
             for destination,work in [(app/'Contents/Candidate.app',root/'work'),
                                       (root/'Candidate.app',app/'Contents/work'),
                                       (root/'Candidate.app',root/'original-work/subdir'),
+                                      (root/'Candidate.app',root/'Candidate.app/work'),
+                                      (root/'Candidate.app',root/'Candidate.app'),
                                       (root/'library/Candidate.app',root/'work')]:
                 with patch.object(build,'sync_tree',side_effect=AssertionError('must not sync')), \
                      patch.object(build,'ensure_shader_service',side_effect=AssertionError('must not build')):

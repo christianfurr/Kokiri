@@ -208,6 +208,8 @@ def paths_overlap(a,b):
 def validate_staged_paths(app,destination,work):
     if paths_overlap(app,destination) or paths_overlap(app,work):
         raise ValueError('staged rebuild must not overlap the original app')
+    if destination==work or destination in work.parents:
+        raise ValueError('staged rebuild work must not be inside its replaceable output app')
     original=plistlib.loads((app/'Contents/Info.plist').read_bytes())
     for key in ('MNGWorkFolder','MNGGameDataFolder'):
         if original.get(key) and (paths_overlap(original[key],work) or paths_overlap(original[key],destination)):
