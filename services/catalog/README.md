@@ -5,6 +5,10 @@ TypeScript/Python clients. The native Foundation/CryptoKit client is
 `macos/Sources/KokiriCore/CatalogClient.swift`. Protocol and trust/consent details
 are in `docs/catalog/` at the repository root.
 
+An optional guarded Node/SQLite host reuses the same HTTP handler and validators:
+[selfhost/README.md](selfhost/README.md). Its private loopback staging is separate
+from public hosting, production signing and native runtime acceptance.
+
 Local setup (no authentication or remote resources required):
 
 ```sh

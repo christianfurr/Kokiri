@@ -2,10 +2,15 @@
 
 ## Self-hosting assessment
 
+The implemented guarded Node/SQLite adapter and private-stage instructions now
+live in [selfhost/README.md](../../services/catalog/selfhost/README.md). It reuses
+the Worker validators/routes. The assessment below records the earlier initial
+inventory; private staging, public rollout and native admission remain separate.
+
 The protocol does not require Cloudflare, but the current server implementation
-does: `src/worker.ts` expects Workers request handling and a D1 binding. There
-is no production Node/SQLite HTTP server in this repository. Installing Node or
-copying the SQL migration alone does not make a self-hosted catalog available.
+in `src/worker.ts` expects Workers request handling and a D1 binding. The new
+adapter supplies that narrow database/request boundary on Node. Installing Node
+or copying the SQL migration alone does not make a catalog available.
 
 A 2026-11-15 SSH assessment verified the existing migration on Ubuntu 22.04's
 SQLite 3.37.2, in memory only. `INSERT ... RETURNING`, duplicate handling,
@@ -53,10 +58,10 @@ for populated prebuilt-library bundles remain unsupported. See
 [runtime-handoff.md](runtime-handoff.md). Keep the static website and app
 release distribution separate from this small catalog API.
 
-This is an assessed deployment option. No server adapter, running service,
-production signing key, DNS route or public endpoint is supplied by this
-assessment. Internet upload capacity, availability and public request latency
-remain unmeasured.
+The initial assessment supplied no running service, production signing key, DNS
+route or public endpoint. Subsequent adapter/private-stage evidence belongs in
+its own deployment receipt. Internet upload capacity, availability and public
+request latency remain unmeasured.
 
 References: [Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/),
 [hostname routing](https://developers.cloudflare.com/tunnel/concepts/routing/),

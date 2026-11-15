@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily verified Kokiri metadata snapshot
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=15m
+Persistent=true
+Unit=kokiri-catalog-backup.service
+
+[Install]
+WantedBy=timers.target

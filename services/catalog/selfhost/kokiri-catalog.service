@@ -1,0 +1,43 @@
+[Unit]
+Description=Kokiri metadata catalog (private loopback)
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/kokiri-catalog/current
+Environment=KOKIRI_CATALOG_DATA=%h/.local/share/kokiri-catalog/data
+Environment=KOKIRI_CATALOG_PORT=8787
+Environment=KOKIRI_CATALOG_INGEST=0
+Environment=KOKIRI_CATALOG_TRUSTED_KEYS=%h/.local/share/kokiri-catalog/current/trusted-keys.json
+ExecStart=%h/.local/share/kokiri-catalog/runtime/bin/node --max-old-space-size=128 --permission --allow-fs-read=%h/.local/share/kokiri-catalog --allow-fs-write=%h/.local/share/kokiri-catalog/data %h/.local/share/kokiri-catalog/current/server.mjs
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateUsers=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindReadOnlyPaths=%h/.local/share/kokiri-catalog
+BindPaths=%h/.local/share/kokiri-catalog/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=256M
+MemorySwapMax=0
+CPUQuota=20%
+TasksMax=32
+LimitNOFILE=128
+LogRateLimitIntervalSec=60s
+LogRateLimitBurst=5
+
+[Install]
+WantedBy=default.target

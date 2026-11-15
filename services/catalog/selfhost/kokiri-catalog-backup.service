@@ -1,0 +1,33 @@
+[Unit]
+Description=Verify and snapshot Kokiri metadata database
+
+[Service]
+Type=oneshot
+Environment=KOKIRI_CATALOG_DATA=%h/.local/share/kokiri-catalog/data
+Environment=KOKIRI_CATALOG_BACKUPS=%h/.local/share/kokiri-catalog/backups
+Environment=KOKIRI_CATALOG_TRUSTED_KEYS=%h/.local/share/kokiri-catalog/current/trusted-keys.json
+ExecStart=%h/.local/share/kokiri-catalog/runtime/bin/node --max-old-space-size=128 %h/.local/share/kokiri-catalog/current/backup.mjs
+TimeoutStartSec=300
+UMask=0077
+NoNewPrivileges=true
+PrivateUsers=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindReadOnlyPaths=%h/.local/share/kokiri-catalog
+BindPaths=%h/.local/share/kokiri-catalog/backups
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=256M
+MemorySwapMax=0
+CPUQuota=10%
+TasksMax=32
+LimitNOFILE=128
+LogRateLimitIntervalSec=60s
+LogRateLimitBurst=5
