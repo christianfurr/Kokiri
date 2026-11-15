@@ -409,7 +409,7 @@ def guard_publication_paths(out, cache, staging, old, protected_paths=(), additi
 
 
 def publish_seed(out, cache, verified, inventory, metadata, *, started_at, shader_list=None,
-                 scope_keys=None, logs=None, jobs=2, protected_paths=()):
+                 scope_keys=None, logs=None, jobs=2, protected_paths=(), expected_output_sha256=None):
     """Publish already request-verified outputs with the existing seed format.
 
     The caller supplies context/completion metadata after native verification.
@@ -440,6 +440,8 @@ def publish_seed(out, cache, verified, inventory, metadata, *, started_at, shade
         report.get('listed_variants') != report.get('listed_asked')):
         raise ValueError('seed publication lacks complete verified request counts')
     files, indexes = seed_files(cache, verified, jobs)
+    if expected_output_sha256 is not None and set(files) != set(expected_output_sha256):
+        raise ValueError('seed publication output inventory differs from its verified evidence')
     keys = sorted(name[:-len('.variants')] for name in files if name.endswith('.variants'))
     missing = {key: inventory[key] for key in sorted(inventory.keys() - set(keys))}
     if logs is not None:
@@ -477,6 +479,13 @@ def publish_seed(out, cache, verified, inventory, metadata, *, started_at, shade
         (staging/'pso_manifest.tsv').write_text('# NS2 startup shaders; render pipelines come from the shared list.\n')
     report.update(shaders=sum(name.endswith('_b.metal') for name in files), seconds=round(time.time()-started_at, 1))
     report['files'], read = publish_digests(sorted(staging.iterdir()), out, lambda paths: parallel_sha256(paths, jobs))
+    if expected_output_sha256 is not None:
+        for name, source in files.items():
+            actual = sha256(source if name in indexes else staging/name)
+            if actual != expected_output_sha256[name]:
+                raise ValueError('seed publication cached output changed after reconciliation: '+name)
+            if name not in indexes:
+                report['files'][name] = actual
     print(f'seed files: {len(report["files"])}, {read} read again (the rest kept the digest of the last seed)', flush=True)
     (staging/'seed-manifest.json').write_text(json.dumps(report, indent=2)+'\n')
     # This record identifies files by inode/content, not the staging folder's
@@ -518,6 +527,26 @@ def publish_seed(out, cache, verified, inventory, metadata, *, started_at, shade
     return report
 
 
+def seed_metadata(args, prebuilt, context, romfs_sha, corpus, corpus_inputs, inventory, totals, progress, only=None):
+    """Existing manifest metadata, shared by native and evidence-only publication."""
+    here = Path(__file__).resolve().parent
+    inputs = dict(chain=CHAIN, version=args.version, source_romfs_sha256=romfs_sha, translation_context_sha256=context,
+                  nvn_depth_mode=args.depth_mode, translator_sha256=sha256(prebuilt),
+                  shader_list_sha256=sha256(args.list) if args.list else None, corpus_sha256=sha256(corpus),
+                  scripts_sha256={name: sha256(here/name) for name in ('prepare_ns2_seed.py', 'prepare_shader_seed.py', 'shader_list.py')},
+                  only_sha256=sha256(args.only) if only else None)
+    return dict(schema=1, chain=CHAIN, version=args.version, game=args.version, source_romfs_sha256=romfs_sha,
+                translation_context_sha256=context, nvn_depth_mode=args.depth_mode,
+                runtime_sha256=sha256(args.binary), translator_sha256=sha256(prebuilt),
+                shader_list_sha256=sha256(args.list) if args.list else None,
+                corpus_sha256=sha256(corpus), corpus_inputs=corpus_inputs, all_default=True,
+                only=len(only) if only else None,
+                stages={str(stage): sum(item['stage'] == stage for item in inventory.values()) for stage in range(6)},
+                preparation_sha256=sha256(Path(__file__).resolve()), corpus_shaders=totals['corpus_shaders'],
+                translated_default=totals['translated_default'], listed_variants=totals['listed_variants'],
+                listed_asked=totals['listed_asked'], batch_receipts=progress, inputs=inputs, files={})
+
+
 def only_keys(path):
     """The 64-hex shader keys of an --only file, one per line."""
     keys = {line.strip() for line in Path(path).read_text().splitlines() if line.strip()}
@@ -548,6 +577,8 @@ def main():
     p.add_argument('--batch-size', type=int, default=500,
                    help='maximum known default plus recorded binding requests per process (1-500)')
     p.add_argument('--max-batches', type=int, help='bounded pilot; incomplete coverage exits 2 without publishing a seed')
+    p.add_argument('--resume-plan', type=Path, help='index of existing immutable partitions and successful finite-window ledgers')
+    p.add_argument('--publish-verified-only', action='store_true', help='reconcile the resume plan and publish without native execution or partition rewriting')
     p.add_argument('--output', type=Path, help='default build/shader-seed/<version>')
     p.add_argument('--logs', type=Path, default=Path('logs'))
     p.add_argument('--only', type=Path, help='translate only these shaders (one 64-hex key per line): a quick build\'s '
@@ -559,6 +590,10 @@ def main():
         p.error('--batch-size must be between 1 and 500 known requests')
     if a.max_batches is not None and a.max_batches < 1:
         p.error('--max-batches must be positive')
+    if bool(a.resume_plan) != a.publish_verified_only:
+        p.error('--resume-plan and --publish-verified-only are required together')
+    if a.resume_plan and (a.only or a.max_batches is not None or not a.list):
+        p.error('resume publication requires --list and does not accept --only or --max-batches')
     a.binary = a.binary.resolve()
     v = a.version
     out = a.output or Path(f'build/shader-seed/{v}')
@@ -572,6 +607,8 @@ def main():
     want = {'romfs_sha256': romfs_sha, 'modules': {e.name: sha256(e) for e in sorted(elf.glob('*.elf'))},
             'tool': sha256(Path(__file__).resolve().parent / 'ns2_shader_corpus.py'), 'list': sha256(a.list) if a.list else None}
     if not corpus.is_file() or not stamp.is_file() or json.loads(stamp.read_text()) != want:
+        if a.publish_verified_only:
+            raise ValueError('publish-only requires the existing verified original corpus; regeneration is disabled')
         corpus.parent.mkdir(parents=True, exist_ok=True)
         run([sys.executable, Path(__file__).resolve().parent / 'ns2_shader_corpus.py', '--romfs', romfs,
              '--modules', *sorted(elf.glob('*.elf')), '--out', corpus, '--jobs', a.jobs,
@@ -593,6 +630,24 @@ def main():
         raise ValueError('missing source-built shader translator: ' + str(prebuilt))
     context = translation_context(prebuilt, a.depth_mode)
     cache = cache / context
+    if a.publish_verified_only:
+        from resume_shader_seed import reconcile_plan
+        identity = dict(chain=CHAIN, version=v, source_romfs_sha256=romfs_sha, corpus_sha256=sha256(corpus),
+                        shader_list_sha256=sha256(a.list), runtime_sha256=sha256(a.binary), translator_sha256=sha256(prebuilt),
+                        translation_context_sha256=context, nvn_depth_mode=a.depth_mode)
+        reconciled = reconcile_plan(a.resume_plan, expected_identity=identity, corpus=corpus,
+                                    shader_list=a.list, cache=cache, jobs=a.jobs)
+        report = seed_metadata(a, prebuilt, context, romfs_sha, corpus, want, reconciled['inventory'],
+                               reconciled['totals'], reconciled['progress'])
+        if any(report.get(field) != value for field, value in identity.items()):
+            raise ValueError('resume source or executable identity changed during reconciliation')
+        report['inputs'].update(resume_plan_sha256=reconciled['progress']['resume_plan_sha256'],
+                                resume_implementation_sha256=reconciled['progress']['resume_implementation_sha256'])
+        publish_seed(out, cache, reconciled['verified'], reconciled['inventory'], report, started_at=t0,
+                     shader_list=a.list, logs=a.logs, jobs=a.jobs,
+                     expected_output_sha256=reconciled['output_sha256'],
+                     protected_paths=(a.resume_plan, corpus, a.binary, prebuilt, *reconciled['protected_paths']))
+        return
     cache.mkdir(parents=True, exist_ok=True)
     # A concurrent App package may replace the shared build/shader-service binary.
     # This preparation uses its own immutable copy, named by the translation context.
@@ -668,25 +723,7 @@ def main():
                                expected_listed_requests=progress['listed_requests'])
     progress.update(status='complete', totals=totals)
     atomic_json(progress_path, progress)
-    here = Path(__file__).resolve().parent
-    inputs = dict(chain=CHAIN, version=v, source_romfs_sha256=romfs_sha, translation_context_sha256=context,
-                  nvn_depth_mode=a.depth_mode, translator_sha256=sha256(prebuilt),
-                  shader_list_sha256=sha256(a.list) if a.list else None, corpus_sha256=sha256(corpus),
-                  scripts_sha256={n: sha256(here / n) for n in ('prepare_ns2_seed.py', 'prepare_shader_seed.py', 'shader_list.py')},
-                  only_sha256=sha256(a.only) if only else None)
-    report = dict(schema=1, chain=CHAIN, version=v, game=v, source_romfs_sha256=romfs_sha,
-                  translation_context_sha256=context,
-                  nvn_depth_mode=a.depth_mode,
-                  runtime_sha256=sha256(a.binary), translator_sha256=sha256(prebuilt),
-                  shader_list_sha256=sha256(a.list) if a.list else None,
-                  corpus_sha256=sha256(corpus), corpus_inputs=want, all_default=True,
-                  only=len(only) if only else None,   # a quick seed: only these shaders (the rest translated at first use)
-                  stages={str(st): sum(x['stage'] == st for x in inventory.values()) for st in range(6)},
-                  preparation_sha256=sha256(Path(__file__).resolve()),
-                  corpus_shaders=totals['corpus_shaders'], translated_default=totals['translated_default'],
-                  listed_variants=totals['listed_variants'], listed_asked=totals['listed_asked'],
-                  batch_receipts=progress,
-                  inputs=inputs, files={})
+    report = seed_metadata(a, prebuilt, context, romfs_sha, corpus, want, inventory, totals, progress, only)
     publish_seed(out, cache, verified, inventory, report, started_at=t0, shader_list=a.list,
                  scope_keys=sorted(corpus_inventory(full_corpus)) if only else None,
                  logs=a.logs, jobs=a.jobs,
