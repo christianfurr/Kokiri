@@ -100,6 +100,13 @@ without its WAL context. Failures preserve existing snapshots and emit a generic
 failure event. Monitor the backup unit/timer; the process does not invent a
 successful backup when checks fail.
 
+The backup unit requires the catalog already active, and does not start a
+manually stopped service. Its read-only WAL access was verified while the
+catalog was running. Closed WAL databases can require writable sidecars, so
+offline recovery uses the separate restore tool rather than relaxing the
+backup's data mount. Stale owner-private backup staging files older than a day
+are removed on a later run; a killed unit never promotes its partial snapshot.
+
 Copy snapshots and their hashes off the server, validate hashes on receipt,
 restrict permissions, and retain an independently verified copy. A same-disk
 backup is not protection against losing the host/disk. The daily timer schedules

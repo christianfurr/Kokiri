@@ -1,5 +1,7 @@
 [Unit]
 Description=Verify and snapshot Kokiri metadata database
+Requisite=kokiri-catalog.service
+After=kokiri-catalog.service
 
 [Service]
 Type=oneshot

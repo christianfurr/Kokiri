@@ -8,6 +8,14 @@ process.umask(0o077);
 try {
   const data = privateDirectory(process.env.KOKIRI_CATALOG_DATA);
   const directory = privateDirectory(process.env.KOKIRI_CATALOG_BACKUPS);
+  // A killed/timed-out prior unit may leave its unpublished staging files.
+  // The unit is single-instance and bounded to five minutes. Only our own
+  // regular, owner-private staging files older than a day are eligible.
+  for (const name of readdirSync(directory)) {
+    if (!/^\.backup-[a-f0-9-]{36}\.partial(?:\.sha256)?$/.test(name)) continue;
+    const path = join(directory, name); regularPrivateFile(path);
+    if (Date.now() - lstatSync(path).mtimeMs > 86400000) rmSync(path);
+  }
   const path = join(data, 'catalog.sqlite');
   regularPrivateFile(path);
   const db = new DatabaseSync(path, { readOnly: true, timeout: 1000, allowExtension: false });
