@@ -8,9 +8,10 @@ import tempfile
 import time
 import struct
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import zlib
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from development import Development, PATHS, COORDINATOR, profile_manifest, digest
@@ -22,11 +23,16 @@ class Process:
     value=None
     human=False
     def sample(self,pid): return dict(self.value) if self.value and pid==self.value['pid'] else None
+    def presence(self,pid): return 'present' if self.value and pid==self.value['pid'] else 'gone'
     def game_running(self): return self.human
 
 
 class DevelopmentTests(unittest.TestCase):
     def setUp(self):
+        # These generated fixtures contain only bytes, not a game profile. Keep
+        # logic tests independent of host capacity; test the real guard below.
+        capacity=patch('development.shutil.disk_usage',return_value=SimpleNamespace(free=8*(1<<30)))
+        capacity.start();self.addCleanup(capacity.stop)
         self.temporary=tempfile.TemporaryDirectory();self.root=Path(self.temporary.name).resolve()
         self.workspace=self.root/'workbench';self.workspace.mkdir(mode=0o700)
         self.fixture=self.root/'fixture';self.fixture.mkdir();(self.fixture/'save').mkdir()
@@ -61,6 +67,12 @@ class DevelopmentTests(unittest.TestCase):
         copied=self.session/'profile/save/test.bin';source=self.fixture/'save/test.bin'
         self.assertEqual(copied.read_bytes(),source.read_bytes());self.assertNotEqual(copied.stat().st_ino,source.stat().st_ino)
         copied.write_bytes(b'test-only-edit');self.assertEqual(source.read_bytes(),b'original-test-save')
+
+    def test_below_storage_floor_refuses_before_any_copy(self):
+        with patch('development.shutil.disk_usage',return_value=SimpleNamespace(free=6*(1<<30))), \
+                patch('development.shutil.copytree') as copy:
+            with self.assertRaisesRegex(KokiriError,'6GiB'):self.manager.create('test','test')
+            copy.assert_not_called()
 
     def test_human_id_and_path_traversal_never_adopted(self):
         for identifier in ['../fixture','human','ab'*10]:
@@ -109,6 +121,83 @@ class DevelopmentTests(unittest.TestCase):
             with self.subTest(target=target),patch('kokiri.sys.platform','darwin'),patch('kokiri.subprocess.run') as probe:
                 probe.side_effect=lambda command,**kw: type('Result',(),{'returncode':0 if command[-1]==target else 1})()
                 self.assertTrue(reader.game_running())
+
+    def test_unreadable_process_cannot_be_marked_stopped_or_mutated(self):
+        self.live()
+        self.process.value=None  # rusage/path failure supplies no identity sample.
+        ownership=(self.session/'ownership.json').read_bytes()
+        for presence in ('present','unknown'):
+            with self.subTest(presence=presence),patch.object(self.process,'presence',return_value=presence), \
+                    patch('development.subprocess.Popen') as spawn,patch('development.shutil.copytree') as copy:
+                operations=[lambda:self.manager.close(self.id),lambda:self.manager.restart(self.id),
+                            lambda:self.manager.launch(self.id),lambda:self.manager.reset(self.id),
+                            lambda:self.manager.configure(self.id,{'graphics-overlay.txt':2}),
+                            lambda:self.manager.workshop(self.id,'snapshot',slot=1)]
+                for operation in operations:
+                    with self.assertRaises(KokiriError):operation()
+                spawn.assert_not_called();copy.assert_not_called()
+                self.assertEqual((self.session/'ownership.json').read_bytes(),ownership)
+                self.assertEqual(list((self.session/'settings/game').iterdir()),[])
+                self.assertFalse((self.session/'revoked').exists())
+                self.assertEqual((self.session/'profile/save/test.bin').read_bytes(),b'original-test-save')
+
+    def test_proven_exit_allows_close_then_stopped_settings(self):
+        self.live();self.process.value=None
+        with patch.object(self.process,'presence',return_value='gone'):
+            self.assertTrue(self.manager.close(self.id)['exited'])
+            self.manager.configure(self.id,{'graphics-overlay.txt':2})
+        self.assertEqual((self.session/'settings/game/graphics-overlay.txt').read_text(),'2\n')
+
+    def test_only_own_child_handle_is_reaped_before_exit_probe(self):
+        self.live()
+        child=Mock(pid=991)
+        def exited():
+            self.process.value=None
+            return 0
+        child.poll.side_effect=exited
+        self.manager.children[self.id]=child
+        self.assertTrue(self.manager.close(self.id)['exited'])
+        child.poll.assert_called_once()
+        self.assertNotIn(self.id,self.manager.children)
+
+    def test_missing_or_invalid_launch_metadata_never_proves_exit(self):
+        self.live();self.process.value=None
+        for pid in (None,True,-1,0,1,'991'):
+            atomic_json(self.session/'session.json',{'pid':pid})
+            with self.subTest(pid=pid),self.assertRaises(KokiriError):self.manager.close(self.id)
+        (self.session/'session.json').unlink()
+        owned=json.loads((self.session/'ownership.json').read_text());owned['spawn_pid']=991
+        atomic_json(self.session/'ownership.json',owned)
+        with self.assertRaises(KokiriError):self.manager.close(self.id)
+        with self.assertRaises(KokiriError):self.manager.reset(self.id)
+        atomic_json(self.session/'session.json',{'pid':992})
+        with self.assertRaises(KokiriError):self.manager.close(self.id)
+        atomic_json(self.session/'session.json',{'pid':991})
+        child=Mock(pid=992);self.manager.children[self.id]=child
+        with self.assertRaises(KokiriError):self.manager.close(self.id)
+        child.poll.assert_not_called()
+
+    def test_case_alias_source_containment_refused_before_copy(self):
+        alias=self.workspace.with_name(self.workspace.name.upper())
+        if not alias.exists() or not alias.samefile(self.workspace):
+            self.skipTest('The temporary filesystem has no case-insensitive directory alias.')
+        parent_alias=self.root.with_name(self.root.name.upper())
+        nested=self.workspace/'NestedFixture';nested.mkdir();(nested/'fixture.bin').write_bytes(b'synthetic')
+        for source in (alias,parent_alias,alias/'nestedfixture'):
+            with self.subTest(source=source):
+                self.registry['fixtures']['test']['profile']=str(source)
+                atomic_json(self.workspace/'registry.json',self.registry)
+                with patch('development.shutil.copytree') as copy:
+                    with self.assertRaises(KokiriError):self.manager.create('test','test')
+                    copy.assert_not_called()
+
+    def test_failed_game_probe_blocks_launch_before_spawn(self):
+        self.grant()
+        with patch.object(self.process,'game_running',side_effect=KokiriError('unavailable')), \
+                patch('development.subprocess.Popen') as spawn:
+            with self.assertRaises(KokiriError):self.manager.launch(self.id)
+            spawn.assert_not_called()
+        self.assertEqual(json.loads((self.session/'ownership.json').read_text())['state'],'prepared')
 
     def test_stopped_settings_are_allowlisted_and_atomic_validation(self):
         with self.assertRaises(KokiriError):self.manager.configure(self.id,{'graphics-overlay.txt':2,'unknown':'/outside'})

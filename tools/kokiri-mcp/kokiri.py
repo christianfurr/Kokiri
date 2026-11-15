@@ -180,12 +180,30 @@ class ProcessReader:
                 "physical_footprint_bytes": struct.unpack_from("=Q", usage, 72)[0],
                 "resident_bytes": struct.unpack_from("=Q", usage, 64)[0]}
 
+    def presence(self, pid: int) -> str:
+        """Identity sampling failure is not exit proof. Signal zero never signals."""
+        if os.name != "posix" or type(pid) is not int or pid <= 1:
+            return "unknown"
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return "gone"
+        except OSError:
+            return "unknown"
+        return "present"
+
     def game_running(self) -> bool:
         if sys.platform != "darwin":
-            return False
+            raise KokiriError("Game process detection requires macOS.")
         for name in ("KokiriGame", "OcarinaOfTime", "TOTK", "BotW", "Bananza", "Pokopia", "oot-native.*", "totk-native.*"):
-            if subprocess.run(["/usr/bin/pgrep", "-x", name], capture_output=True, timeout=3).returncode == 0:
+            try:
+                result = subprocess.run(["/usr/bin/pgrep", "-x", name], capture_output=True, timeout=3)
+            except (OSError, subprocess.SubprocessError) as error:
+                raise KokiriError("Game process detection failed; launch refused.") from error
+            if result.returncode == 0:
                 return True
+            if result.returncode != 1:
+                raise KokiriError("Game process detection failed; launch refused.")
         return False
 
     def windows(self, pid: int) -> list[int]:

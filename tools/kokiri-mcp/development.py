@@ -18,6 +18,7 @@ import uuid
 
 from kokiri import (KokiriError, ProcessReader, SessionStore, atomic_json,
                     bounded_bytes, checked_directory, complete_png, json_file, open_relative, tail, LOG_FILES)
+from containment import require_disjoint_directories
 
 IDENTIFIER = re.compile(r"[a-z][a-z0-9_-]{0,47}\Z")
 SESSION = re.compile(r"[0-9a-f]{32}\Z")
@@ -70,6 +71,7 @@ class Development:
         self.observer = SessionStore(process_reader=self.process)
         self.observer.observe_roots.append(self.workspace/"sessions")
         self.runtime_checks = {}
+        self.children = {}
 
     def registry(self) -> dict:
         try:
@@ -159,8 +161,7 @@ class Development:
             raise KokiriError("That registered runtime or fixture is unavailable.") from error
         _, executable = self.runtime(runtime)
         workspace = checked_directory(self.workspace)
-        if source == workspace or source in workspace.parents or workspace in source.parents:
-            raise KokiriError("Keep fixture source profiles separate from the development workspace.")
+        require_disjoint_directories(source, workspace)
         before = profile_manifest(source)
         needed=2*sum((source/name).stat().st_size for name in before if not name.endswith("/"))
         if shutil.disk_usage(workspace).free-needed<6*(1<<30):
@@ -205,10 +206,26 @@ class Development:
         return self.observer.verified_process(metadata)
 
     def stopped(self, root: Path, owned: dict) -> bool:
-        # Unknown/reused PIDs are never signaled; conservatively refuse save writes
-        # while any process still occupies the last recorded PID.
-        metadata = json_file(root, "session.json") if (root/"session.json").exists() else {}
-        return owned.get("state") in {"prepared", "stopped"} and self.process.sample(metadata.get("pid")) is None
+        return owned.get("state") in {"prepared", "stopped"} and self.recorded_exit(root, owned)
+
+    def recorded_exit(self, root: Path, owned: dict) -> bool:
+        try:
+            metadata = json_file(root, "session.json")
+        except FileNotFoundError:
+            # Newly prepared or closed-without-launching sessions have no PID.
+            return "spawn_pid" not in owned and owned.get("state") in {"prepared", "stopped"}
+        pid = metadata.get("pid")
+        if type(pid) is not int or pid <= 1:
+            return False
+        if "spawn_pid" in owned and (type(owned["spawn_pid"]) is not int or owned["spawn_pid"] != pid):
+            return False
+        child = self.children.get(root.name)
+        if child is not None and child.pid != pid:
+            return False
+        if child is not None and child.pid == pid and child.poll() is not None:
+            # Reap only handles created here; never reap/adopt an arbitrary PID.
+            self.children.pop(root.name)
+        return self.process.presence(pid) == "gone"
 
     def permit(self, owned: dict) -> dict:
         registry = self.registry()
@@ -292,6 +309,7 @@ class Development:
                     process = subprocess.Popen([str(executable), "--kokiri-development", str(root)], cwd=app,
                                                env=environment, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                                start_new_session=True)
+                    self.children[session_id] = process
                 except OSError:
                     owned["state"]="prepared";atomic_json(root/"ownership.json",owned)
                     raise
@@ -402,14 +420,14 @@ class Development:
         with self.locked(session_id) as (root, owned):
             if owned["state"] in {"launching","unverified"}:
                 raise KokiriError("Launch identity is unverified. Integration must inspect it before this session can be edited or reused.")
+            exited = self.recorded_exit(root, owned)
             sample = self.sample(root)
             if sample:
                 self.identity(root, owned)
                 self.write(root, owned, "close", "")
                 return {"session_id": session_id, "status": "close_requested", "exited": False}
-            metadata = json_file(root, "session.json") if (root/"session.json").exists() else {}
-            if self.process.sample(metadata.get("pid")) is not None:
-                raise KokiriError("Process identity changed. No process was signaled or adopted.")
+            if not exited:
+                raise KokiriError("Process exit is unproven. No process was signaled, adopted or marked stopped.")
             owned["state"] = "stopped"; atomic_json(root/"ownership.json", owned)
             atomic_json(root/"revoked", {"reason": "closed"})
             return {"session_id": session_id, "status": "stopped", "exited": True}
@@ -419,7 +437,7 @@ class Development:
         deadline=time.monotonic()+30
         while time.monotonic()<deadline:
             with self.locked(session_id) as (root,owned):
-                if self.sample(root) is None:break
+                if self.recorded_exit(root,owned):break
                 self.identity(root,owned)   # Human takeover/revocation stops this workflow.
             time.sleep(.1)
         result=self.close(session_id)
