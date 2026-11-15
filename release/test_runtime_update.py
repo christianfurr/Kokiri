@@ -94,7 +94,7 @@ class RuntimeUpdateTests(unittest.TestCase):
                                  path='/private/fixture/libmetal_rt_osx.a', size=123)],
             effective_invocations=[
                 ['/private/fixture/frontend', '-cc1', '-triple', 'air64-apple-macosx26.0.0',
-                 '-o', '<intermediate.air>', '<probe-dir>/identity.metal'],
+                 '-fwrapv', '-fpreserve-invariance', '-o', '<intermediate.air>', '<probe-dir>/identity.metal'],
                 ['/private/fixture/linker', '<intermediate.air>', '/private/fixture/libmetal_rt_osx.a',
                  '-o', '<probe-dir>/identity.partial']])
 
@@ -302,36 +302,40 @@ class RuntimeUpdateTests(unittest.TestCase):
     def test_candidate_requires_current_target_and_each_correctness_flag(self):
         app, original, original_info = self.app()
         original_manifest = self.library_manifest(app)
-        for missing in ('-mmacosx-version-min=26.0', '-fpreserve-invariance', '-fwrapv', 'target'):
+        for missing in ('-mmacosx-version-min=26.0', '-fmetal-math-mode=safe',
+                        '-fpreserve-invariance', '-fwrapv', 'target'):
             with self.subTest(missing=missing):
                 receipt, info, manifest = deepcopy(original), deepcopy(original_info), deepcopy(original_manifest)
                 observation = receipt['compiler_observation']
                 if missing == 'target':
                     observation['effective_target'] = 'air64-apple-macosx27.0.0'
                     observation['effective_invocations'][0][3] = observation['effective_target']
+                    receipt['compiler_context_sha256'] = self.compiler_key(observation)
                 else:
                     observation['effective_flags'].remove(missing)
-                # A self-consistent digest cannot make an unsupported target or
-                # reduced correctness options eligible for a new runtime update.
-                receipt['compiler_context_sha256'] = self.compiler_key(observation)
+                    with self.assertRaisesRegex(ValueError, 'exact four safe driver options'):
+                        self.compiler_key(observation)
+                # The target case has a valid digest; invalid driver options keep
+                # the old digest as a forged claim. Both fail explicit policy.
                 manifest['compiler_observation'] = deepcopy(observation)
                 manifest['compiler_context_sha256'] = receipt['compiler_context_sha256']
                 self.write_library_manifest(app, receipt, info, manifest)
                 with patch.object(runtime.subprocess, 'run'):
-                    with self.assertRaises(ValueError):
+                    with self.assertRaisesRegex(ValueError, 'required macOS target or correctness flags'):
                         runtime.inspect_app(app, self.record)
 
-    def test_candidate_rejects_extra_or_duplicate_driver_flags_with_valid_context_digest(self):
+    def test_candidate_rejects_extra_or_duplicate_driver_flags_with_forged_context_digest(self):
         app, original, original_info = self.app()
         original_manifest = self.library_manifest(app)
-        for extra in ('-fno-wrapv', '-fno-preserve-invariance', '-ffast-math',
+        for extra in ('-fno-wrapv', '-fno-preserve-invariance', '-fstrict-overflow', '-ffast-math',
                       '-funsafe-math-optimizations', '-fmetal-math-mode=fast', '-fwrapv', '-g'):
             with self.subTest(extra_driver_flag=extra):
                 receipt, info, manifest = deepcopy(original), deepcopy(original_info), deepcopy(original_manifest)
                 observation = receipt['compiler_observation']
                 observation['effective_flags'].append(extra)
-                context = self.compiler_key(observation)
-                self.assertNotEqual(context, original['compiler_context_sha256'])
+                with self.assertRaisesRegex(ValueError, 'exact four safe driver options'):
+                    self.compiler_key(observation)
+                context = original['compiler_context_sha256']
                 receipt['compiler_context_sha256'] = context
                 manifest['compiler_observation'] = deepcopy(observation)
                 manifest['compiler_context_sha256'] = context
@@ -343,15 +347,16 @@ class RuntimeUpdateTests(unittest.TestCase):
     def test_candidate_rejects_frontend_policy_overrides_with_exact_driver_flags(self):
         app, original, original_info = self.app()
         original_manifest = self.library_manifest(app)
-        for override in ('-fno-wrapv', '-fno-preserve-invariance', '-ffast-math',
+        for override in ('-fno-wrapv', '-fno-preserve-invariance', '-fstrict-overflow', '-ffast-math',
                          '-funsafe-math-optimizations', '-fmetal-math-mode=fast'):
             with self.subTest(frontend_override=override):
                 receipt, info, manifest = deepcopy(original), deepcopy(original_info), deepcopy(original_manifest)
                 observation = receipt['compiler_observation']
                 observation['effective_invocations'][0].append(override)
                 self.assertEqual(observation['effective_flags'], original['compiler_observation']['effective_flags'])
-                context = self.compiler_key(observation)
-                self.assertNotEqual(context, original['compiler_context_sha256'])
+                with self.assertRaisesRegex(ValueError, 'conflicting compilation option'):
+                    self.compiler_key(observation)
+                context = original['compiler_context_sha256']
                 receipt['compiler_context_sha256'] = context
                 manifest['compiler_observation'] = deepcopy(observation)
                 manifest['compiler_context_sha256'] = context
@@ -359,6 +364,27 @@ class RuntimeUpdateTests(unittest.TestCase):
                 with patch.object(runtime.subprocess, 'run'):
                     with self.assertRaisesRegex(ValueError, 'overrides the required correctness policy'):
                         runtime.inspect_app(app, self.record)
+
+    def test_frontend_requires_each_positive_correctness_option_exactly_once(self):
+        app, original, original_info = self.app()
+        original_manifest = self.library_manifest(app)
+        for option in ('-fwrapv', '-fpreserve-invariance'):
+            for action in ('missing', 'duplicate'):
+                with self.subTest(option=option, action=action):
+                    receipt, info, manifest = deepcopy(original), deepcopy(original_info), deepcopy(original_manifest)
+                    observation = receipt['compiler_observation']
+                    frontend = observation['effective_invocations'][0]
+                    if action == 'missing':
+                        frontend.remove(option)
+                    else:
+                        frontend.append(option)
+                    with self.assertRaisesRegex(ValueError, 'exact wrap and invariance options'):
+                        self.compiler_key(observation)
+                    manifest['compiler_observation'] = deepcopy(observation)
+                    self.write_library_manifest(app, receipt, info, manifest)
+                    with patch.object(runtime.subprocess, 'run'):
+                        with self.assertRaisesRegex(ValueError, 'Invalid qualified compiler observation'):
+                            runtime.inspect_app(app, self.record)
 
     def test_candidate_rejects_forged_context_digest_with_matching_observations(self):
         app, receipt, info = self.app()
