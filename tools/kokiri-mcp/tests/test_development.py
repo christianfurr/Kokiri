@@ -52,6 +52,9 @@ class DevelopmentTests(unittest.TestCase):
 
     def live(self,slot=True):
         self.process.value={'pid':991,'executable':str(self.exe),'process_start':123,'process_uuid':'ab'*16,'physical_footprint_bytes':2048,'resident_bytes':1024}
+        owned=json.loads((self.session/'ownership.json').read_text())
+        owned['spawn_pid']=991
+        atomic_json(self.session/'ownership.json',owned)
         atomic_json(self.session/'session.json',self.process.value)
         request={'schema':1,'session_id':self.id,'nonce':'ab'*32,'expires_unix':time.time()+600,'executable_sha256':digest(self.exe)}
         atomic_json(self.session/'request.json',request);atomic_json(self.session/'lease.json',request)
@@ -174,6 +177,31 @@ class DevelopmentTests(unittest.TestCase):
         with self.assertRaises(KokiriError):self.manager.close(self.id)
         atomic_json(self.session/'session.json',{'pid':991})
         child=Mock(pid=992);self.manager.children[self.id]=child
+        with self.assertRaises(KokiriError):self.manager.close(self.id)
+        child.poll.assert_not_called()
+
+    def test_exit_requires_persisted_spawn_binding_not_metadata_alone(self):
+        self.live();self.process.value=None
+        original=json.loads((self.session/'ownership.json').read_text())
+        for value in ('missing',None,True,False,0,-1,'991',991.0):
+            owned=dict(original)
+            if value=='missing':owned.pop('spawn_pid')
+            else:owned['spawn_pid']=value
+            atomic_json(self.session/'ownership.json',owned)
+            before=(self.session/'ownership.json').read_bytes()
+            with self.subTest(spawn_pid=value),patch.object(self.process,'presence',return_value='gone') as probe:
+                for operation in (lambda:self.manager.close(self.id),lambda:self.manager.restart(self.id),
+                                  lambda:self.manager.launch(self.id),lambda:self.manager.reset(self.id),
+                                  lambda:self.manager.configure(self.id,{'graphics-overlay.txt':2}),
+                                  lambda:self.manager.workshop(self.id,'snapshot',slot=1)):
+                    with self.assertRaises(KokiriError):operation()
+                probe.assert_not_called()
+            self.assertEqual((self.session/'ownership.json').read_bytes(),before)
+        owned.pop('spawn_pid',None);atomic_json(self.session/'ownership.json',owned)
+        child=Mock(pid=991);self.manager.children[self.id]=child
+        with self.assertRaises(KokiriError):self.manager.close(self.id)
+        child.poll.assert_not_called()
+        (self.session/'session.json').unlink()
         with self.assertRaises(KokiriError):self.manager.close(self.id)
         child.poll.assert_not_called()
 

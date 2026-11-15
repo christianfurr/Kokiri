@@ -213,11 +213,13 @@ class Development:
             metadata = json_file(root, "session.json")
         except FileNotFoundError:
             # Newly prepared or closed-without-launching sessions have no PID.
-            return "spawn_pid" not in owned and owned.get("state") in {"prepared", "stopped"}
+            return ("spawn_pid" not in owned and root.name not in self.children
+                    and owned.get("state") in {"prepared", "stopped"})
         pid = metadata.get("pid")
         if type(pid) is not int or pid <= 1:
             return False
-        if "spawn_pid" in owned and (type(owned["spawn_pid"]) is not int or owned["spawn_pid"] != pid):
+        spawn_pid = owned.get("spawn_pid")
+        if type(spawn_pid) is not int or spawn_pid <= 1 or spawn_pid != pid:
             return False
         child = self.children.get(root.name)
         if child is not None and child.pid != pid:
