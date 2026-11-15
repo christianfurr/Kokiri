@@ -147,6 +147,23 @@ class LibraryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'selected linker'):
             toolchain.driver_commands('"/fixture/metal" "-cc1" "-c"')
 
+    def test_loader_overrides_are_rejected_before_driver_observation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            compiler = Path(folder)/'metal'
+            compiler.write_bytes(b'fixture compiler')
+            for variable in ('DYLD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_FRAMEWORK_PATH'):
+                with self.subTest(variable=variable), mock.patch.object(toolchain.subprocess, 'run') as run:
+                    with self.assertRaisesRegex(ValueError, 'nonempty DYLD_'):
+                        toolchain.compiler_observation(str(compiler), 'fixture', {variable: '/fixture'}, ['-safe'])
+                    run.assert_not_called()
+
+    def test_recorded_working_directory_is_conservatively_bound(self):
+        first = self.qualified_observation()
+        second = self.qualified_observation()
+        first['effective_invocations'][0].append('-fcoverage-compilation-dir=/first/checkout')
+        second['effective_invocations'][0].append('-fcoverage-compilation-dir=/relocated/checkout')
+        self.assertNotEqual(libraries.compiler_context_key(first), libraries.compiler_context_key(second))
+
     def test_qualified_context_rejects_missing_static_input_or_invocation_inventory(self):
         for field, value in [('required_files', []), ('effective_invocations', None)]:
             observation = self.qualified_observation()

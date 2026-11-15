@@ -102,7 +102,13 @@ def resource_headers_identity(resource_dir):
 
 
 def compiler_context_key(observation):
-    """Stable compilation identity: paths and diagnostic driver text are provenance."""
+    """Hash the validated library invocation, including its recorded absolute paths.
+
+    Only probe-temporary paths are normalized. Selected tools/inputs and emitted
+    working-directory arguments stay bound in effective_invocations, so moving
+    a toolchain or checkout may conservatively invalidate reuse. The top-level
+    observation.path and raw diagnostic text are provenance, not extra key fields.
+    """
     context = {key: observation.get(key) for key in (
         'qualified', 'backend', 'version', 'executable_sha256',
         'effective_flags', 'effective_target', 'sdk_mode')}
@@ -202,6 +208,9 @@ def compiler_observation(metal, version, env, flags):
         return dict(qualified=False, backend='metal', version=version, effective_flags=list(flags),
                     effective_target=None, sdk_mode='unobserved',
                     reason='compiler executable unavailable')
+    overrides = sorted(key for key, value in env.items() if key.startswith('DYLD_') and value)
+    if overrides:
+        raise ValueError('qualified Metal compiler identity does not support nonempty DYLD_* environment: '+', '.join(overrides))
     # Match build_shader_libs compile_one: no -c; this invocation produces a
     # library through the selected frontend AND linker. -### performs no codegen.
     with tempfile.TemporaryDirectory(prefix='kokiri-metal-identity-') as folder:
@@ -267,6 +276,7 @@ def compiler_observation(metal, version, env, flags):
                 driver_plan=result.stderr,driver_plan_sha256=hashlib.sha256(result.stderr.encode()).hexdigest(),
                 resource_dir=resources[0],resource_headers=headers,
                 observation_schema=2,tool_components=components,required_files=required,
+                loader_environment_policy='reject-nonempty-DYLD',
                 host_identity=host,effective_invocations=invocations,
                 sdk_mode='compiler-default-resource-headers',available_macos_sdk=sdk,
                 developer_dir=env.get('DEVELOPER_DIR'),
