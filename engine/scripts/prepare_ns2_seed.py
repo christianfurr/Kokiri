@@ -29,6 +29,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from prepare_shader_seed import CHAIN, shader_key_scope, record_verified   # noqa: E402
+from shader_list import canonical, listed_answers
 from ns2_shader_corpus import CORPUS_MAGIC, shader_key
 
 VARIANTS = re.compile(r'^[0-9a-f]{64}\.variants$')
@@ -220,6 +221,19 @@ def corpus_subset(path, keys, out):
     return count
 
 
+def listed_request_count(rows):
+    """Count the nondefault requests runtime_shader_seed will make, including repeats."""
+    empty = '{"attr":{},"fout":{},"img":{},"tex":{}}'
+    count = 0
+    for line in rows:
+        fields = line.split('\t')
+        if len(fields) != 3 or fields[0] != 'V' or canonical(json.loads(fields[2])) is None:
+            raise ValueError('invalid recorded shader binding row')
+        if listed_answers(fields[2]) != empty:
+            count += 1
+    return count
+
+
 def partition_corpus(path, folder, batch_size=500, shader_list=None):
     """Bound each process by defaults plus all supplied V rows, conservatively.
 
@@ -254,7 +268,8 @@ def partition_corpus(path, folder, batch_size=500, shader_list=None):
         chunks.append(dict(corpus=str(corpus.resolve()), corpus_sha256=sha256(corpus),
                            list=str(list_path.resolve()) if list_path else None,
                            list_sha256=sha256(list_path) if list_path else None,
-                           keys=list(keys), known_requests=requests, listed_rows=len(rows)))
+                           keys=list(keys), known_requests=requests, listed_rows=len(rows),
+                           listed_requests=listed_request_count(rows)))
 
     try:
         for key, _, _, raw in corpus_records(path):
@@ -280,7 +295,7 @@ def partition_corpus(path, folder, batch_size=500, shader_list=None):
     return chunks
 
 
-def batch_completion(text, keys, verified, has_list=False, returncode=0):
+def batch_completion(text, keys, verified, has_list=False, returncode=0, *, expected_listed_requests=0):
     """Accept only actual native reports paired with this process's verified set."""
     if returncode:
         raise ValueError(f'seed batch exited with {returncode}')
@@ -294,6 +309,8 @@ def batch_completion(text, keys, verified, has_list=False, returncode=0):
     listed_done, listed_asked = map(int, listed[0]) if listed else (0, 0)
     if completed != len(keys) or asked != len(keys):
         raise ValueError('incomplete shader seed batch defaults')
+    if listed_asked != expected_listed_requests:
+        raise ValueError('native listed request population differs from the source binding plan')
     if listed_done != listed_asked:
         raise ValueError('incomplete listed shader variants in batch')
     if (not verified or any(not VARIANT.fullmatch(name) for name in verified) or
@@ -301,19 +318,20 @@ def batch_completion(text, keys, verified, has_list=False, returncode=0):
         raise ValueError('seed batch verified set differs from its requests or corpus')
     return dict(keys=list(keys), translated_default=completed, corpus_shaders=asked,
                 listed_variants=listed_done, listed_asked=listed_asked,
+                listed_requests=expected_listed_requests,
                 checked_variants=variants, cached_kept=kept, made_again=made_again)
 
 
-def aggregate_batches(inventory, batches, verified):
+def aggregate_batches(inventory, batches, verified, *, expected_listed_requests=0):
     seen = set()
-    fields = ('translated_default', 'corpus_shaders', 'listed_variants', 'listed_asked',
+    fields = ('translated_default', 'corpus_shaders', 'listed_variants', 'listed_asked', 'listed_requests',
               'checked_variants', 'cached_kept', 'made_again')
     total = dict.fromkeys(fields, 0)
     for batch in batches:
         keys = set(batch['keys'])
         if seen & keys or not keys or batch['translated_default'] != len(keys) or batch['corpus_shaders'] != len(keys):
             raise ValueError('duplicate or incomplete shader batch')
-        if batch['listed_variants'] != batch['listed_asked']:
+        if batch['listed_variants'] != batch['listed_asked'] or batch['listed_asked'] != batch['listed_requests']:
             raise ValueError('incomplete listed shader variants in batch')
         seen.update(keys)
         for field in fields:
@@ -321,6 +339,8 @@ def aggregate_batches(inventory, batches, verified):
     if (seen != set(inventory) or {name[:64] for name in verified} != set(inventory) or
         total['checked_variants'] != len(verified)):
         raise ValueError('incomplete shader batches: full corpus and verified coverage required')
+    if total['listed_asked'] != expected_listed_requests:
+        raise ValueError('aggregate listed requests differ from the source binding plan')
     return total
 
 
@@ -433,6 +453,7 @@ def main():
                     translation_context_sha256=context, batch_size=a.batch_size, jobs=a.jobs,
                     planned_batches=len(batches), corpus_shaders=len(inventory),
                     known_requests=sum(batch['known_requests'] for batch in batches), batches=[])
+    progress['listed_requests'] = sum(batch['listed_requests'] for batch in batches)
     atomic_json(progress_path, progress)
     print(f"seed batches: {len(batches)}, at most {a.batch_size} known requests per process; progress {progress_path}", flush=True)
     verified = set()
@@ -450,7 +471,8 @@ def main():
                                         stdout=output, stderr=subprocess.STDOUT).wait()
                 checked = set(verified_list.read_text().split()) if verified_list.is_file() else set()
                 report = batch_completion(log.read_text(errors='replace'), batch['keys'], checked,
-                                          bool(batch['list']), result)
+                                          bool(batch['list']), result,
+                                          expected_listed_requests=batch['listed_requests'])
                 if report['corpus_shaders']+report['listed_asked'] > batch['known_requests']:
                     raise ValueError('native batch requested more than the planned bound')
                 outputs, _ = seed_files(cache, checked, a.jobs, batch['keys'])
@@ -475,7 +497,8 @@ def main():
     if len(progress['batches']) != len(batches):
         print(f'partial seed pilot: {len(progress["batches"])}/{len(batches)} batches checked; no full seed published; {progress_path}', flush=True)
         raise SystemExit(2)
-    totals = aggregate_batches(inventory, progress['batches'], verified)
+    totals = aggregate_batches(inventory, progress['batches'], verified,
+                               expected_listed_requests=progress['listed_requests'])
     progress.update(status='complete', totals=totals)
     atomic_json(progress_path, progress)
     files, indexes = seed_files(cache, verified, a.jobs)

@@ -44,6 +44,7 @@ class SeedTests(unittest.TestCase):
             shader_list.write_text(binding+'\n'+ignored+'\n# no other rows enter the native chunk\n')
             chunks = seed.partition_corpus(corpus, root/'chunks', 2, shader_list)
             self.assertEqual([chunk['known_requests'] for chunk in chunks], [2, 2, 1])
+            self.assertEqual([chunk['listed_requests'] for chunk in chunks], [1, 0, 0])
             self.assertTrue(all(chunk['known_requests'] <= 2 for chunk in chunks))
             raw = [row[3] for chunk in chunks for row in seed.corpus_records(Path(chunk['corpus']))]
             self.assertEqual(raw, [row[3] for row in seed.corpus_records(corpus)])
@@ -81,6 +82,26 @@ class SeedTests(unittest.TestCase):
         total = seed.aggregate_batches(dict.fromkeys(keys), [first, second], verified)
         self.assertEqual(total['translated_default'], 2)
         self.assertEqual(total['checked_variants'], 2)
+
+    def test_omitted_nondefault_binding_requests_cannot_pass_zero_of_zero(self):
+        key = 'a'*64
+        verified = {key+'-'+'b'*12}
+        with self.assertRaisesRegex(ValueError, 'source binding plan'):
+            seed.batch_completion(self.completion(1), [key], verified, has_list=True,
+                                  expected_listed_requests=1)
+        default = seed.batch_completion(self.completion(1), [key], verified, has_list=True)
+        with self.assertRaisesRegex(ValueError, 'source binding plan'):
+            seed.aggregate_batches({key: {}}, [default], verified, expected_listed_requests=1)
+
+    def test_default_equivalent_rows_are_not_counted_as_listed_requests(self):
+        key = 'a'*64
+        self.assertEqual(seed.listed_request_count([f'V\t{key}\t{{}}',
+                                                   f'V\t{key}\t'+json.dumps({'tex': {}})]), 0)
+        self.assertEqual(seed.listed_request_count([f'V\t{key}\t'+json.dumps({'tex': {'0': '*2d'}})]), 1)
+        verified = {key+'-'+'b'*12}
+        report = seed.batch_completion(self.completion(1), [key], verified, has_list=True,
+                                       expected_listed_requests=0)
+        self.assertEqual(report['listed_requests'], 0)
 
     def test_bounded_pilot_checkpoints_actual_outputs_without_publishing_full_seed(self):
         with tempfile.TemporaryDirectory() as folder:
