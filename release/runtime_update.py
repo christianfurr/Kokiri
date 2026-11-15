@@ -250,6 +250,9 @@ def inspect_app(app, record=None):
             and DIGEST.fullmatch(str(build_hash)) and identity.get('runtime_sha256') == build_hash
             and info.get('KokiriBuildRuntimeSHA256') == build_hash,
             'Prepared runtime/source/shader identity differs from the signed release')
+    require(DIGEST.fullmatch(str(identity.get('seed_runtime_sha256', '')))
+            and identity['seed_runtime_sha256'] == build_hash,
+            'Seed requests were not verified by the current build runtime')
     require(DIGEST.fullmatch(str(identity.get('translation_context_sha256', '')))
             and DIGEST.fullmatch(str(identity.get('translator_sha256', ''))),
             'Prepared translation context and translator identity required')
@@ -345,6 +348,10 @@ def verify_preparation_artifacts(app, receipt, *, qualify_compiler=False):
         if name == 'pipeline_index_sha256':
             continue
         manifest = read_json(path, limit=32 << 20)
+        if name == 'seed_manifest_sha256' and qualify_compiler:
+            require(manifest.get('runtime_sha256') == receipt['identity']['seed_runtime_sha256']
+                    == receipt['artifact_sha256']['runtime_sha256'],
+                    'Seed manifest requests belong to another build runtime')
         if name == 'libraries_manifest_sha256' and qualify_compiler:
             verify_compiler_context(receipt, manifest)
         files = manifest.get('files')

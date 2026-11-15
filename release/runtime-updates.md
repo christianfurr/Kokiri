@@ -73,6 +73,11 @@ identities, full mode and complete requested default/listed variants, compiled
 libraries and pipelines with no failures. The source list's 50,376 metadata
 rows are never interpreted as compiled shader totals. A complete receipt covers
 its requested corpus, not every possible future gameplay variant.
+For a new candidate, the receipt's `seed_runtime_sha256` and the actual sealed
+seed manifest's `runtime_sha256` must both match the pre-seal build runtime.
+An older request proof is refused even when its translator namespace is still
+compatible. Reusing cached translations requires real request revalidation by
+the current runtime; changing identity labels cannot establish that evidence.
 
 Promotion also requires `compiler_context_schema: 2` in both the receipt and
 library manifest, an identical qualified `observation_schema: 2` Metal

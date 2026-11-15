@@ -77,15 +77,16 @@ app=Path(a.out);shutil.copytree(a.rebuild,app)
 resources=app/'Contents/Resources';(resources/'fixture-version.txt').write_text('updated-fixture\n')
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 build=resources/'totk/build';artifacts={}
+executable=app/'Contents/MacOS/KokiriGame';artifacts['runtime_sha256']=sha(executable)
 for name,folder,filename in [('seed_manifest_sha256','shader-seed','seed-manifest.json'),('libraries_manifest_sha256','shader-libs','libraries-manifest.json'),('pipeline_manifest_sha256','pipelines','compute-manifest.json')]:
  target=build/folder;target.mkdir(parents=True,exist_ok=True);payload=target/'fixture-payload.txt';payload.write_text('synthetic-data-only\n');manifest=target/filename;metadata={'files':{payload.name:sha(payload)}}
  if folder=='shader-libs':metadata.update(compiler_context_schema=2,compiler_context_sha256=compiler_context,compiler_observation=observation)
+ if folder=='shader-seed':metadata['runtime_sha256']=artifacts['runtime_sha256']
  manifest.write_text(json.dumps(metadata));artifacts[name]=sha(manifest)
 index=build/'pipelines/pipelines-fixture.tsv';index.write_text('synthetic-index\n');artifacts['pipeline_index_sha256']=sha(index)
-executable=app/'Contents/MacOS/KokiriGame';artifacts['runtime_sha256']=sha(executable)
 counts={'requested':1,'completed':1,'failed':0}
 receipt={'schema':'kokiri-preparation-receipt-v1','mode':'full','prepared':True,'errors':[],
- 'identity':{'source_commit':record['source_commit'],'chain':record['shader_chain'],'runtime_sha256':sha(executable),'runtime_hash_scope':'pre-seal build executable; final signed bytes require an external package fingerprint','translation_context_sha256':'c'*64,'translator_sha256':'d'*64,'gpu_architecture':'fixture'},
+ 'identity':{'source_commit':record['source_commit'],'chain':record['shader_chain'],'runtime_sha256':sha(executable),'seed_runtime_sha256':sha(executable),'runtime_hash_scope':'pre-seal build executable; final signed bytes require an external package fingerprint','translation_context_sha256':'c'*64,'translator_sha256':'d'*64,'gpu_architecture':'fixture'},
  'variants':{'default':counts,'listed':{'requested':0,'completed':0,'failed':0},'unique_completed':1},
  'libraries':counts,'pipelines':dict(counts,write_failed=0,unaccounted=0),'artifact_sha256':artifacts,
  'compiler_context_schema':2,'compiler_context_sha256':compiler_context,'compiler_observation':observation}
