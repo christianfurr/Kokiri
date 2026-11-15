@@ -19,6 +19,13 @@ jobs:
       - run: python scripts/check_publication.py --staged
       - run: python -m unittest discover -s tests -v
       - run: python -I -m unittest discover -s engine/tests -p test_standalone_build.py -v
+      - name: Check shader preparation coverage and chunk receipts
+        run: |
+          python -I -m unittest discover -s engine/tests -p test_preparation_receipt.py -v
+          python -I -m unittest discover -s engine/tests -p test_shader_seed.py -v
+          python -I -m unittest discover -s engine/tests -p test_compute_pipelines.py -v
+      - name: Check actual presentation certification
+        run: python -I -m unittest discover -s engine/tests -p test_analyze_presented.py -v
       - name: Parse public Python source
         run: |
           python - <<'PY'
@@ -59,6 +66,14 @@ jobs:
       - run: python3 -I -m unittest discover -s engine/tests -p test_oot_live_bridge.py -v
       - run: python3 -I -m unittest discover -s engine/tests -p test_startup_view.py -v
       - run: python3 -I -m unittest discover -s engine/tests -p test_catalog_runtime.py -v
+      - name: Check shader compiler identity and packaging gates
+        run: |
+          python3 -I -m unittest discover -s engine/tests -p test_shader_libraries.py -v
+          python3 -I -m unittest discover -s engine/tests -p test_shader_package.py -v
+      - name: Check storage lifetime and synthetic audio
+        run: |
+          python3 -I -m unittest discover -s engine/tests -p test_storage_sweep.py -v
+          python3 -I -m unittest discover -s engine/tests -p test_audio_renderer.py -v
       - name: Check actual runtime UI source
         run: >-
           xcrun clang -fsyntax-only -std=c11 -Wall -Wextra -Werror
