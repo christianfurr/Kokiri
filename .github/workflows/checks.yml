@@ -91,7 +91,7 @@ jobs:
           python3 -m venv "$KOKIRI_RELEASE_VENV"
           "$KOKIRI_RELEASE_VENV/bin/python" -m pip install --only-binary=:all: -r release/requirements.txt
           "$KOKIRI_RELEASE_VENV/bin/python" -m pip check
-          "$KOKIRI_RELEASE_VENV/bin/python" -B -m unittest discover -s release -p 'test_runtime*.py' -v
+          "$KOKIRI_RELEASE_VENV/bin/python" -B -m unittest discover -s release -p 'test_*.py' -v
       - run: bash macos/test.sh
       - run: bash macos/build.sh
       - run: python3 -I -m unittest discover -s engine/tests -p test_oot_live_bridge.py -v
@@ -113,6 +113,13 @@ jobs:
         run: |
           python3 -I -m unittest discover -s engine/tests -p test_storage_sweep.py -v
           python3 -I -m unittest discover -s engine/tests -p test_audio_renderer.py -v
+      - name: Check actual archive library validation and renderer sources
+        working-directory: engine
+        run: |
+          xcrun clang -std=gnu11 -fobjc-arc -fblocks -DGAME_OOT=1 -DGAME_NS2=1 -O0 -Wall -Wextra -Werror -Wno-unused-function -Wno-deprecated-declarations tests/archive_library_snapshot.m -framework Foundation -o "$RUNNER_TEMP/kokiri-archive-library-snapshot"
+          "$RUNNER_TEMP/kokiri-archive-library-snapshot" "$RUNNER_TEMP/kokiri-archive-fixture-data"
+          xcrun clang -O2 -g -Wall -Wextra -Wno-error -Wno-unused-function -Wno-unused-parameter -std=gnu11 -fobjc-arc -Ithird_party/d2r_gfx/gfx/nvn/include -Iruntime -DGAME_OOT=1 -DGAME_NS2=1 -DTOTK_CONTRIB_INBOX='""' -DTOTK_BOARD_URL='""' -DTOTK_NAME_URL='""' -DTOTK_SHOT_URL='""' -c third_party/d2r_gfx/gfx/nvn/nvn_mtl.m -o "$RUNNER_TEMP/kokiri-renderer.o"
+          xcrun clang -std=gnu11 -fobjc-arc -Wall -Wextra -Wno-error -Wno-unused-function -Wno-unused-parameter -Ithird_party/d2r_gfx/gfx/nvn/include -Iruntime -DGAME_OOT=1 -DGAME_NS2=1 -DTOTK_CONTRIB_INBOX='""' -DTOTK_BOARD_URL='""' -DTOTK_NAME_URL='""' -DTOTK_SHOT_URL='""' -fsyntax-only third_party/d2r_gfx/gfx/nvn/totk_shader_rt.m
       - name: Check actual runtime UI source
         working-directory: engine
         run: |
