@@ -182,6 +182,50 @@ class RuntimeUpdateTests(unittest.TestCase):
                     runtime.extract_source(archive, destination, self.record)
                 self.assertFalse(destination.exists())
 
+    def test_signed_resource_hash_allows_updated_recognized_metadata(self):
+        name, content = 'engine/assets/shader_list.tsv', b'offline updated metadata fixture\n'
+        archive = self.archive(extra=((name, stat.S_IFREG | 0o644, content),))
+        self.record['public_resource_sha256'] = {name: hashlib.sha256(content).hexdigest()}
+        manifest, signature = self.manifest()
+        verified = runtime.verify_manifest(manifest, signature, self.public)
+        destination = self.root / 'updated-metadata'
+        runtime.extract_source(archive, destination, verified)
+        self.assertEqual((destination / name).read_bytes(), content)
+
+    def test_updated_metadata_requires_exact_signed_resource_declaration(self):
+        name, content = 'engine/assets/shader_list.tsv', b'offline updated metadata fixture\n'
+        archive = self.archive(extra=((name, stat.S_IFREG | 0o644, content),))
+        for index, declaration in enumerate(({}, {name: '0' * 64})):
+            with self.subTest(declaration=declaration):
+                record = {**self.record, 'public_resource_sha256': declaration}
+                manifest, signature = self.manifest(record)
+                verified = runtime.verify_manifest(manifest, signature, self.public)
+                destination = self.root / ('unreviewed-metadata-' + str(index))
+                with self.assertRaisesRegex(ValueError, 'publication policy'):
+                    runtime.extract_source(archive, destination, verified)
+                self.assertFalse(destination.exists())
+
+    def test_signed_resource_map_cannot_exempt_private_or_unknown_payloads(self):
+        for index, name in enumerate(('private-game.bin', 'unreviewed-artwork.png')):
+            with self.subTest(name=name):
+                content = b'offline disallowed payload fixture'
+                archive = self.archive(extra=((name, stat.S_IFREG | 0o644, content),))
+                record = {**self.record, 'public_resource_sha256': {name: hashlib.sha256(content).hexdigest()}}
+                manifest, signature = self.manifest(record)
+                verified = runtime.verify_manifest(manifest, signature, self.public)
+                destination = self.root / ('rejected-exemption-' + str(index))
+                with self.assertRaisesRegex(ValueError, 'publication policy'):
+                    runtime.extract_source(archive, destination, verified)
+                self.assertFalse(destination.exists())
+
+    def test_manifest_rejects_invalid_reviewed_resource_hash_maps(self):
+        for resources in ([], {'engine/assets/shader_list.tsv': 'invalid-digest'},
+                          {'engine/assets/shader_list.tsv': 'g' * 64}):
+            with self.subTest(resources=resources):
+                manifest, signature = self.manifest({**self.record, 'public_resource_sha256': resources})
+                with self.assertRaisesRegex(ValueError, 'source-resource hashes'):
+                    runtime.verify_manifest(manifest, signature, self.public)
+
     def test_archive_rejects_duplicate_members(self):
         archive = self.archive(extra=(('LICENSE', stat.S_IFREG | 0o644, 'duplicate'),))
         with self.assertRaisesRegex(ValueError, 'duplicate'):
@@ -488,6 +532,16 @@ class RuntimeUpdateTests(unittest.TestCase):
             self.assertFalse(nested.exists())
         self.assertEqual(list(trusted.iterdir()), [])
         self.assertEqual(list(original.iterdir()), [])
+
+    def test_store_location_refuses_original_app_without_any_writes(self):
+        app = self.root / 'Original Game.app'
+        app.mkdir()
+        for path in (app, app / 'private-runtime-store'):
+            with self.subTest(store=path):
+                with self.assertRaisesRegex(ValueError, 'outside the original app'):
+                    runtime.validate_store_location(path, current_app=app)
+                self.assertFalse((path / '.lock').exists())
+        self.assertEqual(list(app.iterdir()), [])
 
     def test_cli_rejects_work_nested_store_before_lock_or_delivery(self):
         original = self.root / 'original-work'
