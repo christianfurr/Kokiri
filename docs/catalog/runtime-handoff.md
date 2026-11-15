@@ -1,15 +1,64 @@
 # Native metadata handoff
 
 The native render/compute adapter and renderer admission hook are implemented
-and CPU tested. **Public hosting, production signing keys and an actual game
-adoption run are not verified.** No performance improvement is claimed from
-downloading or preparing metadata.
+and CPU tested. On 2026-11-15 the public homepage and
+[protocol endpoint](https://catalog.christianfurr.dev/v1/protocol) were verified
+over HTTPS, including a browser with no cookies or login. Exact manifest/pack
+read paths are public; contributions remain protected and disabled. There are
+no published production packs or manifests yet. **Production signing and pinned
+native keys, an assembled-client download, and actual game adoption remain
+unverified.** No performance improvement is claimed from downloading or
+preparing metadata.
 
 The current adapter does **not** prepare task/mesh (`M`) pipelines. The measured
 multi-second cold mesh compilation hitches need a separate mesh preparation
 path. A nonempty precompiled `shader-libs` directory also stays reference-only
 until its offline compiler/library provenance is included in the identity.
 Neither limitation changes the renderer's existing shader-selection behavior.
+
+## Remaining acceptance
+
+1. Prepare an operator-reviewed, signed publication for a real qualified context
+   with its attribution and pack hashes. Keep its signing private key off the
+   host. Pin the same production public key in the host trust store and native
+   app; do not use fixture keys. `macos/build.sh` already accepts
+   `KOKIRI_CATALOG_ORIGIN=https://catalog.christianfurr.dev` and
+   `KOKIRI_CATALOG_KEYS_JSON`, producing `KokiriCatalogOrigin` and
+   `KokiriCatalogPublicKeys`. Without both origin and keys, the facade remains
+   unconfigured. Enabling community ingestion is not required to prove reads.
+2. Under a separately granted CPU slot, verify the assembled Swift client with
+   that origin/key pair: public download, signature/context/revision/hash checks,
+   an atomic local index, bounded failures and retry, and operation without
+   cookies or a shared API secret. Sharing remains a separate one-time choice;
+   a disabled contribution service must preserve queued records safely.
+3. Under a separately granted game/Metal slot, use an owned disposable profile
+   and the exact recorded executable, translator, device/options observation and
+   locally translated variants. Demonstrate an ordinary C/R recipe absent from
+   the local recipe list being admitted through the actual renderer hook. Prove
+   stale context, source drift and invalid metadata are deferred; preserve player
+   progress, valuable caches, explicit PSO files and existing recipe lists. Play
+   must not wait for the network. A JIT qualification pilot does not establish
+   acceptance of a fully prebuilt v28 package or a frame-rate improvement.
+4. Keep offline/mixed libraries and mesh adoption deferred until their separate
+   contracts below are reviewed and exercised. The deadline does not change
+   these admission boundaries.
+
+### Offline and mesh boundaries
+
+The preparation tooling now records a component-qualified offline compiler
+context with selected driver, frontend/linker, inputs, dependencies, effective
+flags/target and loader policy. That source-level qualification does not prove
+which library a runtime actually loads or establish equivalence to its JIT
+compiler descriptor. `kcr_observe` still rejects a populated `shader-libs`
+directory. Do not remove a completed library set or relabel its receipt to make
+the JIT adapter qualify. Offline/mixed admission needs a reviewed identity
+contract binding the actual selected library bytes and load path to the qualified
+preparation context, including any JIT fallback, followed by live verification.
+
+Signed task/mesh (`M`) metadata remains intact but is not converted into ordinary
+C/R warm rows. Mesh acceptance requires the renderer owner's task/mesh pipeline
+ABI and preparation path, compatible source/reflection and compiler identities,
+and a separately authorized Metal/game adoption test.
 
 ## Implemented native path
 
@@ -124,6 +173,12 @@ packed render expansion, signature/pack/revision rejection, missing/symlinked
 variants, 512/513 deferral, executable replacement, a reused rejected variant
 across 1,000 recipes, and an oversized sparse local source. Synthetic fixtures
 contain nonshader bytes and never execute on a GPU.
+
+Later that day the focused `CatalogWarmPlanTests` suite passed **12 tests** at
+the compiler-identity guard change: the original eight plus four cases covering
+unsupported/offline descriptors with consistent hashes, extra offline evidence,
+canonical API UUIDs, and signed mesh deferral. That CPU-only run does not replace
+the remaining assembled-client and actual renderer adoption checks above.
 
 The actual Foundation helper and production pipeline parser passed **60 checks**
 under AddressSanitizer/UndefinedBehaviorSanitizer. Checks include immutable
