@@ -27,6 +27,9 @@ the selected driver, frontend and linker, their declared local load dependencies
 explicit library inputs, selected Metal headers, effective invocations and target.
 System load dependencies are bound to the host OS build. A launcher hash alone
 cannot qualify an older library manifest or establish reuse under this context.
+Qualification rejects nonempty `DYLD_*` overrides. Selected absolute invocation
+paths and emitted working directories remain conservatively bound, so relocation
+can invalidate reuse even when compiler file contents match.
 The recorded dependency audit does not establish unseen dynamic loads, actual
 library loading or equivalence with runtime JIT compilation. Library compilation
 checkpoints verified successes every 250 results with `complete: false` until the
