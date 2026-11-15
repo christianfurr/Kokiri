@@ -120,7 +120,8 @@ def compiler_observation_fixture():
             dict(role='linker', path=linker, size=300, executable_sha256='4' * 64, dependencies=[])],
         required_files=[dict(role='selected-invocation-input', path=archive, size=123, sha256='3' * 64)],
         effective_invocations=[
-            [frontend, '-cc1', '-triple', 'air64-apple-macosx26.0.0', '-o', '<intermediate.air>', '<probe-dir>/identity.metal'],
+            [frontend, '-cc1', '-triple', 'air64-apple-macosx26.0.0', '-fwrapv', '-fpreserve-invariance',
+             '-o', '<intermediate.air>', '<probe-dir>/identity.metal'],
             [linker, '<intermediate.air>', archive, '-o', '<probe-dir>/identity.partial']])
 
 

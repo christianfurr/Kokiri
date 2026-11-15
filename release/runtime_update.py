@@ -313,7 +313,7 @@ def verify_compiler_context(receipt, libraries):
             and all(isinstance(argv, list) and all(isinstance(arg, str) for arg in argv) for argv in invocations),
             'Compiler observation lacks effective invocations')
     for argv in invocations:
-        require(not any(arg in {'-fno-wrapv', '-fno-preserve-invariance', '-ffast-math', '-funsafe-math-optimizations'}
+        require(not any(arg in {'-fno-wrapv', '-fno-preserve-invariance', '-fstrict-overflow', '-ffast-math', '-funsafe-math-optimizations'}
                         or arg.startswith('-fmetal-math-mode=') and arg != '-fmetal-math-mode=safe' for arg in argv),
                 'Compiler invocation overrides the required correctness policy')
     require(observation == libraries.get('compiler_observation'), 'Compiler observation differs from library manifest')
