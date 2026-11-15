@@ -54,7 +54,7 @@ uv run --locked python -m unittest discover -s tests -v
 
 Tests use closed synthetic sessions and mocked window capture. They exercise real official SDK client/server stdio discovery, resource reads and harmless calls in both modern and legacy-handshake modes. On macOS, a small C probe verifies ctypes process-start and physical-footprint fields against the installed SDK layout using the test Python process. No game or GPU test is launched.
 
-The 2026-11-15 continuation passed 26 tests, including FIFO rejection, concurrent pending-capture accounting, identity pinning across observations and legacy-log separation. The registered earlier snapshot loaded its five tools in Codex and `sessions_list` returned no sessions. That host check does not prove this candidate has replaced the registered source.
+The 2026-11-15 continuation passed 28 tests, including FIFO rejection, cross-process pending-capture accounting, identity pinning across observations and legacy-log separation. The registered earlier snapshot loaded its five tools in Codex and `sessions_list` returned no sessions. That host check does not prove this candidate has replaced the registered source.
 
 Actual gameplay position responses and native game-window capture permission still need a live observation check. Native capture now reserves an empty private PNG before starting; actual `screencapture` overwrite behavior remains part of that live check. The package does not claim these were verified by fixture tests. See `../../docs/native-acceptance.md` for the product acceptance gates.
 

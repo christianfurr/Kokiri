@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+import fcntl
 import hashlib
 import itertools
 import json
@@ -435,13 +436,23 @@ class SessionStore:
             raise KokiriError("Choose window or game_frame capture.")
         folder = self.managed_directory(self.development/"Captures"/session_id)
         with self.capture_lock:
-            if sum(1 for _ in itertools.islice(folder.iterdir(), 64)) >= 64:
-                raise KokiriError("This session reached its 64-capture limit. Preserve/review captures before requesting more.")
-            destination = folder/(uuid.uuid4().hex+".png")
-            # Pending captures count toward the bound before native/background
-            # writers begin; concurrent requests cannot all claim the last slot.
-            descriptor = open_relative(folder, destination.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
-            os.close(descriptor)
+            # Multiple hosts can run this stdio server against the same tree.
+            # Lock the directory itself: no persistent lockfile or stale owner
+            # cleanup, and process exit automatically releases the reservation lock.
+            directory = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                try:
+                    fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as error:
+                    raise KokiriError("Another capture is reserving a slot. Retry the observation.") from error
+                if sum(1 for _ in itertools.islice(folder.iterdir(), 64)) >= 64:
+                    raise KokiriError("This session reached its 64-capture limit. Preserve/review captures before requesting more.")
+                destination = folder/(uuid.uuid4().hex+".png")
+                # Pending captures count before native/background writers begin.
+                descriptor = open_relative(folder, destination.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+                os.close(descriptor)
+            finally:
+                os.close(directory)
         try:
             if surface == "game_frame":
                 self.send_observation(session_id, "wshot "+str(destination))

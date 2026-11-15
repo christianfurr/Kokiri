@@ -1,4 +1,5 @@
 import ctypes
+import fcntl
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -180,6 +181,60 @@ class BoundaryTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=4) as executor:
             results=list(executor.map(lambda _: request(), range(4)))
         self.assertEqual(sum(path is not None for path in results), 1)
+        self.assertEqual(len(list(folder.iterdir())), 64)
+        self.assertEqual((self.folder/'input.txt').read_text().count('wshot '), 1)
+
+    def capture_workers(self, count):
+        script = '''
+import json,sys
+from pathlib import Path
+from kokiri import SessionStore,KokiriError
+root=Path(sys.argv[1])
+metadata=json.loads((root/'Sessions/human/session.json').read_text())
+class Process:
+ def sample(self,pid):
+  return dict(metadata,physical_footprint_bytes=2048,resident_bytes=1024) if pid==metadata['pid'] else None
+store=SessionStore(root,process_reader=Process())
+try:
+ store.capture_request(sys.argv[2],'game_frame')
+ print('reserved')
+except KokiriError:
+ print('refused')
+'''
+        workers = [subprocess.Popen([sys.executable, '-c', script, str(self.store.support), self.identifier],
+                    cwd=str(Path(__file__).resolve().parents[1]), stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, text=True) for _ in range(count)]
+        try:
+            results = []
+            for worker in workers:
+                stdout, stderr = worker.communicate(timeout=10)
+                self.assertEqual(worker.returncode, 0, stderr)
+                results.append(stdout.strip())
+            return results
+        finally:
+            for worker in workers:
+                if worker.poll() is None:
+                    worker.kill()
+                worker.wait()
+
+    def test_capture_reservation_respects_other_process_directory_lock(self):
+        folder = self.store.managed_directory(self.store.development/'Captures'/self.identifier)
+        directory = os.open(folder, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(self.capture_workers(2), ['refused', 'refused'])
+            self.assertEqual(list(folder.iterdir()), [])
+            self.assertEqual((self.folder/'input.txt').read_text(), '')
+        finally:
+            os.close(directory)
+
+    def test_independent_processes_cannot_exceed_last_capture_slot(self):
+        folder = self.store.managed_directory(self.store.development/'Captures'/self.identifier)
+        for index in range(63):
+            (folder/str(index)).touch()
+        results = self.capture_workers(4)
+        self.assertEqual(results.count('reserved'), 1)
+        self.assertEqual(results.count('refused'), 3)
         self.assertEqual(len(list(folder.iterdir())), 64)
         self.assertEqual((self.folder/'input.txt').read_text().count('wshot '), 1)
 
