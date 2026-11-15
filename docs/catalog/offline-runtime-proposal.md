@@ -21,6 +21,16 @@ provenance. A retained file can have valid compiler provenance without a current
 `sources` alias; admission must still prove its local source, reflection and
 entry, rather than infer an alias from the filename.
 
+01 follow-up source `d103278` makes `observation.working_directory` mandatory
+for qualified schema-2 observations. It is the canonical selected driver parent;
+the probe, actual compilation and parser-depth retry all use that same directory.
+The shared `compiler_context_key` validates and binds it while retaining emitted
+invocation arguments, including working-directory arguments. Consume that exact
+reviewed producer/validator once integrated; do not duplicate its normalization
+or accept an earlier observation missing the field. Superseded control/source
+pins remain historical and cannot be relabeled as new qualification. There are
+no qualified outputs to migrate.
+
 Read-only inspection of 01 source `ed5041c` found the internal
 `archive_library_snapshot` validator and a verify-only `lib_from_file` branch.
 It hashes an owned CPU snapshot, checks the listed binary and file drift, and
@@ -128,13 +138,15 @@ production behavior in its normal loader branch.
 
 ## Acceptance sequence
 
-1. Review the identity/policy, source ownership and measured parser/proof bounds.
+1. Review the identity/policy, source ownership and measured parser/proof bounds;
+   pin the integrated canonical-working-directory producer/validator source.
 2. Exercise 01's full-preparation proof with the final runtime, raw manifest,
    schema-2 context and actual selected entries; fresh archive reopen must show
    zero translated-library JIT attempts, misses and writes with unchanged
    archives. This excludes embedded host/support shaders and OS/driver codegen.
 3. Under an allocated CPU slot, exercise the actual private validators: unknown
-   schema, retained-file alias ambiguity, missing/unlisted library, byte/entry
+   schema or missing/noncanonical compiler cwd, retained-file alias ambiguity,
+   missing/unlisted library, byte/entry
    drift, source payload, unexpected JIT, policy mismatch, epoch race and bounds.
 4. Under a separate Metal/game slot, admit a real ordinary C/R catalog recipe
    absent from the local list using the declared offline policy, then prove
