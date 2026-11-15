@@ -2,6 +2,7 @@
 import base64
 import contextlib
 import io
+import hashlib
 from copy import deepcopy
 import importlib.util
 import json
@@ -77,17 +78,20 @@ class RuntimeUpdateTests(unittest.TestCase):
         resources = app / 'Contents/_CodeSignature/CodeResources'
         resources.parent.mkdir()
         resources.write_bytes(b'fixture signature resources')
+        build_input_hash = hashlib.sha256(b'offline pre-seal executable fixture').hexdigest()
         receipt = dict(schema='kokiri-preparation-receipt-v1', mode='full', prepared=True, errors=[],
                        identity=dict(source_commit=self.record['source_commit'], chain=self.record['shader_chain'],
-                                     runtime_sha256=runtime.sha(executable), translation_context_sha256='c' * 64,
+                                     runtime_sha256=build_input_hash, runtime_hash_scope=runtime.BUILD_HASH_SCOPE,
+                                     translation_context_sha256='c' * 64,
                                      translator_sha256='d' * 64, gpu_architecture='apple-gpu-fixture'),
                        variants=dict(default=dict(requested=2, completed=2, failed=0),
                                      listed=dict(requested=0, completed=0, failed=0), unique_completed=2),
-                       artifact_sha256=dict(runtime_sha256=runtime.sha(executable)),
+                       artifact_sha256=dict(runtime_sha256=build_input_hash),
                        libraries=dict(requested=2, completed=2, failed=0),
                        pipelines=dict(requested=2, completed=2, failed=0, write_failed=0, unaccounted=0))
         info = dict(CFBundleIdentifier=runtime.PRODUCT, CFBundleExecutable='KokiriGame', KokiriGameUpdate='131072',
-                    KokiriPrepared=True, KokiriShaders='full', KokiriSourceCommit=self.record['source_commit'])
+                    KokiriPrepared=True, KokiriShaders='full', KokiriSourceCommit=self.record['source_commit'],
+                    KokiriBuildRuntimeSHA256=build_input_hash)
         build = app / 'Contents/Resources/totk/build'
         artifact_paths = {
             'seed_manifest_sha256': build / 'shader-seed/seed-manifest.json',
@@ -189,7 +193,8 @@ class RuntimeUpdateTests(unittest.TestCase):
             result = runtime.inspect_app(app, self.record)
             signed.assert_called_once()
             self.assertEqual(result['version'], 2)
-            self.assertEqual(result['executable_sha256'], receipt['identity']['runtime_sha256'])
+            self.assertEqual(result['build_runtime_sha256'], receipt['identity']['runtime_sha256'])
+            self.assertNotEqual(result['executable_sha256'], result['build_runtime_sha256'])
             for field in ('source_commit', 'chain', 'runtime_sha256'):
                 with self.subTest(identity=field):
                     altered = deepcopy(receipt)
@@ -197,6 +202,62 @@ class RuntimeUpdateTests(unittest.TestCase):
                     self.write_receipt(app, altered, info)
                     with self.assertRaises(ValueError):
                         runtime.inspect_app(app, self.record)
+
+    def test_preseal_hash_scope_and_info_binding_are_required(self):
+        app, receipt, info = self.app()
+        for field in ('identity_hash', 'artifact_hash', 'info_hash', 'hash_scope'):
+            with self.subTest(binding=field):
+                altered, altered_info = deepcopy(receipt), deepcopy(info)
+                if field == 'identity_hash':
+                    altered['identity']['runtime_sha256'] = 'f' * 64
+                elif field == 'artifact_hash':
+                    altered['artifact_sha256']['runtime_sha256'] = 'f' * 64
+                elif field == 'info_hash':
+                    altered_info['KokiriBuildRuntimeSHA256'] = 'f' * 64
+                else:
+                    altered['identity']['runtime_hash_scope'] = 'ambiguous executable bytes'
+                self.write_receipt(app, altered, altered_info)
+                with patch.object(runtime.subprocess, 'run'):
+                    with self.assertRaisesRegex(ValueError, 'identity differs'):
+                        runtime.inspect_app(app, self.record)
+
+    def package_output(self, candidate):
+        return dict(schema='kokiri-package-output-v1', app=candidate['app'],
+                    build_runtime_sha256=candidate['build_runtime_sha256'],
+                    signed_runtime_sha256=candidate['executable_sha256'], info_sha256=candidate['info_sha256'],
+                    code_resources_sha256=candidate['code_resources_sha256'],
+                    preparation_receipt_sha256=candidate['preparation_receipt_sha256'])
+
+    def test_external_package_output_binds_input_and_final_signed_bytes(self):
+        app, receipt, info = self.app()
+        with patch.object(runtime.subprocess, 'run'):
+            candidate = runtime.inspect_app(app, self.record)
+        work = self.root / 'work'
+        output = work / 'logs/package-output.json'
+        output.parent.mkdir(parents=True)
+        output.write_text(json.dumps(self.package_output(candidate)))
+        self.assertEqual(runtime.verify_package_output(work, candidate), runtime.sha(output))
+        self.assertNotEqual(candidate['build_runtime_sha256'], candidate['executable_sha256'])
+
+    def test_external_package_output_rejects_changed_or_missing_identity(self):
+        app, receipt, info = self.app()
+        with patch.object(runtime.subprocess, 'run'):
+            candidate = runtime.inspect_app(app, self.record)
+        work = self.root / 'work'
+        output = work / 'logs/package-output.json'
+        output.parent.mkdir(parents=True)
+        expected = self.package_output(candidate)
+        for field in expected:
+            with self.subTest(changed_field=field):
+                changed = {**expected, field: 'changed fixture identity'}
+                output.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(ValueError, 'package fingerprint differs'):
+                    runtime.verify_package_output(work, candidate)
+        for mutation in ({key: value for key, value in expected.items() if key != 'signed_runtime_sha256'},
+                         {**expected, 'unrecognized_field': 'ambiguous contract'}):
+            output.write_text(json.dumps(mutation))
+            with self.assertRaises(ValueError):
+                runtime.verify_package_output(work, candidate)
 
     def test_receipt_rejects_none_partial_failed_and_unbound_preparation(self):
         app, receipt, info = self.app()
