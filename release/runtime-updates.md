@@ -57,8 +57,10 @@ Each version gets an APFS clone of the local build workspace. Non-venv links
 are rejected so build writes cannot follow them into the original workspace.
 The app, workspace and private build log stay in that version's directory.
 Existing compatible cache/PSO files remain in the original workspace; nothing
-is relabeled between translation chains. The builder must validate compatibility
-and regenerate incompatible shader work. A candidate's external game-data
+is relabeled between translation chains. The builder validates compatibility.
+A changed chain or translator can require a fresh full build; staged rebuilds
+refuse an incompatible workspace. Compatible rebuilds still prepare their
+requested variants and archives. A candidate's external game-data
 library, if any, must resolve inside its own versioned workspace.
 
 The builder must provide

@@ -2,6 +2,8 @@
 """Private diagnostic-app update/relaunch test. Never runs the game or uses its data."""
 import argparse
 import base64
+import ctypes
+import errno
 from datetime import datetime, timezone
 import importlib.util
 import json
@@ -29,6 +31,8 @@ packager = module('runtime_test_packager', 'prepare_runtime_source.py')
 
 C_FIXTURE = r'''
 #include <mach-o/dyld.h>
+#include <libproc.h>
+#include <sys/proc_info.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,7 +52,10 @@ int main(void) {
   if (!fgets(version, sizeof(version), file)) return 7; fclose(file);
   version[strcspn(version, "\n")] = 0;
   file = fopen(marker, "w"); if (!file) return 8;
-  fprintf(file, "%s\n%d\n%s\n", version, getpid(), executable); fclose(file);
+  struct proc_bsdinfo identity;
+  if (proc_pidinfo(getpid(), PROC_PIDTBSDINFO, 0, &identity, sizeof(identity)) != sizeof(identity)) return 9;
+  fprintf(file, "%s\n%d\n%s\n%llu\n%llu\n", version, getpid(), executable,
+          identity.pbi_start_tvsec, identity.pbi_start_tvusec); fclose(file);
   sleep(30); return 0;
 }
 '''
@@ -86,30 +93,81 @@ def run(arguments, cwd=None):
     return subprocess.check_output([str(value) for value in arguments], cwd=cwd, stderr=subprocess.STDOUT, timeout=20)
 
 
-def stop_owned(pid, executable):
-    actual = subprocess.run(['/bin/ps', '-p', str(pid), '-o', 'comm='], capture_output=True, text=True)
-    if actual.returncode == 0:
-        runtime.require(actual.stdout.strip() == str(executable), 'Diagnostic PID ownership changed; no signal sent')
+class ProcBSDInfo(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_uint32) for name in (
+        'flags', 'status', 'xstatus', 'pid', 'ppid', 'uid', 'gid', 'ruid', 'rgid', 'svuid', 'svgid', 'reserved')]
+    _fields_ += [('comm', ctypes.c_char * 16), ('name', ctypes.c_char * 32)]
+    _fields_ += [(name, ctypes.c_uint32) for name in ('nfiles', 'pgid', 'pjobc', 'tdev', 'tpgid', 'nice')]
+    _fields_ += [('started_sec', ctypes.c_uint64), ('started_usec', ctypes.c_uint64)]
+
+
+def process_identity(pid):
+    library = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+    library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+    library.proc_pidinfo.restype = ctypes.c_int
+    library.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    library.proc_pidpath.restype = ctypes.c_int
+    first, second = ProcBSDInfo(), ProcBSDInfo()
+    def snapshot(info):
+        ctypes.set_errno(0)
+        result = library.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
+        if result == 0 and ctypes.get_errno() == errno.ESRCH:
+            return False
+        runtime.require(result == ctypes.sizeof(info), 'Cannot verify full diagnostic process birth identity')
+        return True
+    if not snapshot(first):
+        return None
+    path = ctypes.create_string_buffer(4096)
+    ctypes.set_errno(0)
+    if library.proc_pidpath(pid, path, len(path)) <= 0:
+        if ctypes.get_errno() == errno.ESRCH:
+            return None
+        raise ValueError('Cannot verify diagnostic executable path')
+    if not snapshot(second):
+        return None
+    def birth(info):
+        return info.pid, info.uid, info.started_sec, info.started_usec
+    runtime.require(birth(first) == birth(second) and first.pid == pid and first.started_sec > 0,
+                    'Diagnostic process identity changed during observation')
+    return dict(pid=pid, uid=first.uid, started_sec=first.started_sec,
+                started_usec=first.started_usec, executable=os.fsdecode(path.value))
+
+
+def stop_owned(identity):
+    pid = identity['pid']
+    actual = process_identity(pid)
+    if actual is None:
+        return
+    runtime.require(actual == identity and actual['uid'] == os.getuid(),
+                    'Diagnostic PID/start identity changed; no signal sent')
+    try:
         os.kill(pid, signal.SIGTERM)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            if subprocess.run(['/bin/ps', '-p', str(pid)], stdout=subprocess.DEVNULL).returncode != 0:
-                return
-            time.sleep(0.05)
-        raise ValueError('Diagnostic process did not exit within its stop bound')
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        actual = process_identity(pid)
+        if actual is None or actual != identity:
+            return  # The original exited. Never signal a replacement process.
+        time.sleep(0.05)
+    raise ValueError('Diagnostic process did not exit within its stop bound')
 
 
-def observe(marker, expected, app):
+def observe(marker, expected, app, owned):
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         if marker.is_file():
             rows = marker.read_text().splitlines()
-            if len(rows) == 3 and rows[0] == expected and rows[1].isdigit():
+            if len(rows) == 5 and rows[0] == expected and all(rows[index].isdigit() for index in (1, 3, 4)):
                 pid = int(rows[1])
                 executable = app / 'Contents/MacOS/KokiriGame'
-                actual = run(['/bin/ps', '-p', pid, '-o', 'comm=']).decode().strip()
-                runtime.require(actual == str(executable), 'Launch marker does not identify the selected app')
-                return pid, executable
+                identity = process_identity(pid)
+                runtime.require(identity and identity['executable'] == str(executable)
+                                and rows[2] == str(executable) and identity['started_sec'] == int(rows[3])
+                                and identity['started_usec'] == int(rows[4]) and identity['uid'] == os.getuid(),
+                                'Launch marker does not identify the selected diagnostic process/start')
+                owned.append(identity)
+                return identity
         time.sleep(0.05)
     raise ValueError('Diagnostic app relaunch was not observed')
 
@@ -126,7 +184,7 @@ def selftest(output):
     mac, resources = app / 'Contents/MacOS', app / 'Contents/Resources'
     mac.mkdir(parents=True); resources.mkdir()
     source = output / 'diagnostic.c'; source.write_text(C_FIXTURE)
-    run(['/usr/bin/xcrun', 'clang', '-Os', source, '-o', mac / 'KokiriGame'])
+    run(['/usr/bin/xcrun', 'clang', '-Os', source, '-lproc', '-o', mac / 'KokiriGame'])
     (resources / 'marker-path.txt').write_text(str(marker) + '\n')
     (resources / 'fixture-version.txt').write_text('baseline-fixture\n')
     (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(dict(
@@ -159,11 +217,11 @@ def selftest(output):
             runtime.require(runtime.state(store)['active'] is None, 'Stage selected an app prematurely')
             activated = runtime.activate(store,1,public)
             selected = Path(activated['active']['app'])
-            runtime.relaunch(activated['active']);pid,exe = observe(marker,'updated-fixture',selected);owned.append((pid,exe))
-            stop_owned(pid,exe);owned.remove((pid,exe));marker.unlink()
+            runtime.relaunch(activated['active']);identity = observe(marker,'updated-fixture',selected,owned)
+            stop_owned(identity);owned.remove(identity);marker.unlink()
             rolled = runtime.rollback(store)
-            runtime.relaunch(rolled['active']);pid,exe=observe(marker,'baseline-fixture',app);owned.append((pid,exe))
-            stop_owned(pid,exe);owned.remove((pid,exe))
+            runtime.relaunch(rolled['active']);identity=observe(marker,'baseline-fixture',app,owned)
+            stop_owned(identity);owned.remove(identity)
             runtime.require(runtime.inspect_app(app)==original, 'Original diagnostic app changed')
             runtime.require((work/'preserved-cache.txt').read_text()=='preserved-fixture\n','Original workspace changed')
             runtime.require(runtime.state(store)['highest_version']==1,'Rollback lowered replay protection')
@@ -178,17 +236,11 @@ def selftest(output):
         return result
     finally:
         key.unlink(missing_ok=True)
-        for pid,exe in owned:
-            stop_owned(pid,exe)
-        # Observation may fail after LaunchServices started the fixture. Clean
-        # only our exact private diagnostic paths, even without a parsed marker.
-        expected = {str(app / 'Contents/MacOS/KokiriGame'),
-                    str(output / 'versions/version-1/Kokiri Game.app/Contents/MacOS/KokiriGame')}
-        rows = run(['/bin/ps', '-axo', 'pid=,comm=']).decode().splitlines()
-        for row in rows:
-            fields = row.strip().split(maxsplit=1)
-            if len(fields) == 2 and fields[0].isdigit() and fields[1] in expected:
-                stop_owned(int(fields[0]), Path(fields[1]))
+        for identity in owned:
+            stop_owned(identity)
+        # Unobserved or restarted instances are never signalled. A failed
+        # observation may require waiting for the fixture's 30-second self-exit
+        # and verifying that exit before releasing the exclusive test slot.
 
 
 if __name__ == '__main__':
