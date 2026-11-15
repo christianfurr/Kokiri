@@ -550,13 +550,46 @@ static int probe_ramp_edge(int kind) {
     return checked + 1;
 }
 #endif
+/* Authored dialogue may be routed only to the centre channel. Protect that
+   route as well as every other sink channel when the host output is stereo. */
+static int probe_surround_to_stereo(void) {
+    AudrenParameter p = {.sample_rate=48000, .sample_count=240, .mix_buffer_count=6,
+        .voice_count=1, .sink_count=1, .revision=REV(16)};
+    AudioRenderer *r=renderer_new(&p); audio_mixer_open(r);
+    r->mixes[0]=(AudrenMixIn){.volume=1, .sample_rate=48000, .buffer_count=6,
+        .in_use=1, .mix_id=0, .dest_mix_id=0x7fffffff, .dest_splitter_id=0xffffffffu};
+    r->sinks[0]=(AudrenSinkIn){.type=SINK_DEVICE, .in_use=1, .input_count=6, .inputs={0,1,2,3,4,5}};
+    static float pcm[240]; for(unsigned i=0;i<240;i++)pcm[i]=0.25f;
+    int checked=0;
+    for(unsigned custom=0;custom<2;custom++)for(unsigned channel=0;channel<6;channel++){
+        r->sinks[0].downmix_enabled=custom;
+        r->sinks[0].downmix[0]=0.8f; r->sinks[0].downmix[1]=0.6f; r->sinks[0].downmix[2]=0.4f;
+        memset(r->channels[0].mix,0,sizeof r->channels[0].mix); r->channels[0].mix[channel]=1;
+        AudrenVoiceIn v={.id=0,.is_new=1,.in_use=1,.play_state=PLAY_STARTED,.sample_format=FMT_PCMF32,
+            .sample_rate=48000,.channel_count=1,.pitch=1,.volume=1,.mix_id=0,.splitter_id=0xffffffffu,.channel_ids={0}};
+        v.wave_buffers[0]=(AudrenWaveBuffer){.address=(uintptr_t)pcm,.size=sizeof pcm,.end=240};
+        for(unsigned i=1;i<4;i++)v.wave_buffers[i].sent=1;
+        update_voice(r,&v); audio_voices_prepare(r); audio_mixer_render(r,240.0/48000);
+        float lr[480]; need(audio_mixer_read(r,lr,240)==240,"surround probe ring");
+        float front=custom?0.8f:1, centre=custom?0.6f:0.7071f, surround=custom?0.4f:0.7071f;
+        const float left[6]={front,0,centre,0,surround,0},right[6]={0,front,centre,0,0,surround};
+        for(unsigned i=0;i<240;i++){
+            if(!near(lr[2*i],0.25f*left[channel])||!near(lr[2*i+1],0.25f*right[channel]))
+                runtime_fail("audio probe: six-channel sink to stereo routing");
+            checked+=2;
+        }
+    }
+    audio_mixer_close(r); pthread_mutex_destroy(&r->lock);
+    free(r->voices); free(r->pools); free(r->mixes); free(r->sinks); free(r->effects); free(r->channels); free(r);
+    return checked;
+}
 void runtime_audio_probe(void) {
     setenv("TOTK_AUDIO_OFF", "1", 1);
     setenv("TOTK_AUDIO_CHANNELS", "2", 1);
     const int neg = getenv("TOTK_PROBE_NEGATIVE") != NULL;
     AudrenParameter p = {48000, 240, 8, 1, 4, 1, 2, 0, 0, 0, 0, 0, 1, 2, 0, REV(11)};
     AudioRenderer *r = renderer_new(&p); audio_mixer_open(r);
-    int checked = probe_rev15() + probe_positional_voice_tables(15,0) + probe_positional_voice_tables(15,1) + probe_positional_voice_tables(16,0) + probe_positional_voice_tables(16,1);
+    int checked = probe_rev15() + probe_positional_voice_tables(15,0) + probe_positional_voice_tables(15,1) + probe_positional_voice_tables(16,0) + probe_positional_voice_tables(16,1) + probe_surround_to_stereo();
 #ifdef GAME_NS2
     { int runtime_ns2_input_stream_probe(void); checked += runtime_ns2_input_stream_probe(); }
 #endif
