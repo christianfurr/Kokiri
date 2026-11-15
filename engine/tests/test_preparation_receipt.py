@@ -65,6 +65,11 @@ class PreparationReceiptTests(unittest.TestCase):
         result = self.reject('default shader requests are incomplete')
         self.assertEqual(result['variants']['default']['failed'], 1)
 
+    def test_manifest_cannot_attest_more_defaults_than_variants(self):
+        self.seed['corpus_shaders'] = 4
+        self.seed['translated_default'] = 4
+        self.reject('seed has fewer variants than default shader requests')
+
     def test_listed_binding_failure_is_fatal(self):
         self.seed['listed_variants'] = 0
         result = self.reject('listed shader requests are incomplete')

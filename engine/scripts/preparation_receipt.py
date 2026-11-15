@@ -75,6 +75,8 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
                     if name.endswith('_b.metal')} if isinstance(seed.get('files'), dict) else {}
     if variants_completed is None or variants_completed != len(seed_sources) or not seed_sources:
         errors.append('seed variant count differs from its source manifest')
+    if defaults_requested is not None and variants_completed is not None and variants_completed < defaults_requested:
+        errors.append('seed has fewer variants than default shader requests')
     if libraries.get('complete') is not True:
         errors.append('Metal library compilation is incomplete')
     if libraries.get('subset'):
