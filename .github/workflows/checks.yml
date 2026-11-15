@@ -53,6 +53,12 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - name: Check self-hosted HTTP, SQLite and bundled lifecycle
+        env:
+          KOKIRI_TEST_STAGE: ${{ runner.temp }}/kokiri-catalog-stage
+        run: |
+          node selfhost/build.mjs "$KOKIRI_TEST_STAGE"
+          node --test --test-concurrency=1 tests/selfhost/*.test.mjs
       - run: npm run build
   native-app:
     runs-on: macos-26
@@ -61,6 +67,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.14'
+      - name: Check signed runtime update and diagnostic ownership
+        env:
+          KOKIRI_RELEASE_VENV: ${{ runner.temp }}/kokiri-release-venv
+        run: |
+          python3 -m venv "$KOKIRI_RELEASE_VENV"
+          "$KOKIRI_RELEASE_VENV/bin/python" -m pip install --only-binary=:all: -r release/requirements.txt
+          "$KOKIRI_RELEASE_VENV/bin/python" -m pip check
+          "$KOKIRI_RELEASE_VENV/bin/python" -B -m unittest discover -s release -p 'test_runtime*.py' -v
       - run: bash macos/test.sh
       - run: bash macos/build.sh
       - run: python3 -I -m unittest discover -s engine/tests -p test_oot_live_bridge.py -v
