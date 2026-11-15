@@ -33,6 +33,7 @@ class PreparationReceiptTests(unittest.TestCase):
                            available_macos_sdk={'path': '/private/sdk', 'version': '26.0'})
         observation.update(
             observation_schema=2,
+            loader_environment_policy='reject-nonempty-DYLD',
             host_identity=dict(os_build='fixture-build', machine='arm64', kernel_release='fixture-kernel'),
             tool_components=[
                 dict(role='driver', path='/private/compiler', size=100, executable_sha256='8' * 64, dependencies=[
@@ -162,6 +163,14 @@ class PreparationReceiptTests(unittest.TestCase):
     def test_schema_one_compiler_context_cannot_be_prepared(self):
         self.libraries['compiler_context_schema'] = 1
         self.reject('requires compiler observation and context schema 2')
+
+    def test_missing_loader_environment_policy_returns_structured_error(self):
+        self.libraries['compiler_observation'].pop('loader_environment_policy')
+        self.reject('compiler observation identity is invalid')
+
+    def test_wrong_loader_environment_policy_returns_structured_error(self):
+        self.libraries['compiler_observation']['loader_environment_policy'] = 'unqualified'
+        self.reject('compiler observation identity is invalid')
 
     def test_schema_one_observation_cannot_be_prepared(self):
         self.libraries['compiler_observation']['observation_schema'] = 1
