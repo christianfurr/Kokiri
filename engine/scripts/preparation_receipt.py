@@ -95,10 +95,13 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
         errors.append('Metal compiler identity lacks required correctness options')
     observation = libraries.get('compiler_observation')
     compiler_context = libraries.get('compiler_context_sha256')
+    compiler_context_schema = libraries.get('compiler_context_schema')
     if mode == 'full':
         if not isinstance(observation, dict) or observation.get('qualified') is not True:
             errors.append('full preparation requires a qualified compiler observation')
         else:
+            if observation.get('observation_schema') != 2 or compiler_context_schema != 2:
+                errors.append('full preparation requires compiler observation and context schema 2')
             if observation.get('backend') != 'metal':
                 errors.append('compiler observation backend is not Metal')
             if not DIGEST.fullmatch(str(observation.get('executable_sha256', ''))):
@@ -114,8 +117,14 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
                 errors.append('compiler observation target is not macOS 26.0.0')
             if not DIGEST.fullmatch(str(compiler_context or '')):
                 errors.append('missing library compiler context SHA-256')
-            elif isinstance(headers, dict) and compiler_context != compiler_context_key(observation):
-                errors.append('library compiler context differs from its observation')
+            elif isinstance(headers, dict):
+                try:
+                    observed_context = compiler_context_key(observation)
+                except (ValueError, TypeError, AttributeError, KeyError) as error:
+                    errors.append('compiler observation identity is invalid: ' + str(error))
+                else:
+                    if compiler_context != observed_context:
+                        errors.append('library compiler context differs from its observation')
     sources = libraries.get('sources') if isinstance(libraries.get('sources'), dict) else {}
     library_files = libraries.get('files') if isinstance(libraries.get('files'), dict) else {}
     def library_covered(name, digest):
@@ -205,6 +214,7 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
         observed_specializations=dict(requested=len(observed_sources), completed=observed_compiled,
                                       failed=len(observed_sources) - observed_compiled),
         compiler_observation=copy.deepcopy(observation), compiler_context_sha256=compiler_context,
+        compiler_context_schema=compiler_context_schema,
         unresolved_inputs=copy.deepcopy(unresolved_inputs),
         artifact_sha256=dict(artifact_sha256), errors=errors,
         limitation='Coverage applies to the requested corpus, binding variants and pipeline lists; '

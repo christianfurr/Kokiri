@@ -31,7 +31,25 @@ class PreparationReceiptTests(unittest.TestCase):
                            driver_plan_sha256='9' * 64, sdk_mode='compiler-default-resource-headers',
                            resource_headers={'content_sha256': '7' * 64},
                            available_macos_sdk={'path': '/private/sdk', 'version': '26.0'})
+        observation.update(
+            observation_schema=2,
+            host_identity=dict(os_build='fixture-build', machine='arm64', kernel_release='fixture-kernel'),
+            tool_components=[
+                dict(role='driver', path='/private/compiler', size=100, executable_sha256='8' * 64, dependencies=[
+                    dict(loader_sha256='8' * 64, install_name='/usr/lib/libSystem.B.dylib',
+                         binding='os-build-system-component', os_build='fixture-build')]),
+                dict(role='frontend', path='/private/frontend', size=200, executable_sha256='6' * 64, dependencies=[
+                    dict(loader_sha256='6' * 64, install_name='@rpath/libCompiler.dylib',
+                         binding='hashed-file', sha256='5' * 64, path='/private/libCompiler.dylib', size=50)]),
+                dict(role='linker', path='/private/linker', size=300, executable_sha256='4' * 64, dependencies=[])],
+            required_files=[dict(role='selected-invocation-input', sha256='3' * 64,
+                                 path='/private/libmetal_rt_osx.a', size=123)],
+            effective_invocations=[['/private/frontend', '-cc1', '-triple', 'air64-apple-macosx26.0.0',
+                                    '-o', '<intermediate.air>', '<probe-dir>/identity.metal'],
+                                   ['/private/linker', '<intermediate.air>', '/private/libmetal_rt_osx.a',
+                                    '-o', '<probe-dir>/identity.partial']])
         self.libraries['compiler_observation'] = observation
+        self.libraries['compiler_context_schema'] = 2
         self.libraries['compiler_context_sha256'] = receipt.compiler_context_key(observation)
         self.pipelines = dict(chain=self.identity['chain'], runtime_sha256='f' * 64,
                               render=2, compute=1, mesh=1, kept=2, failed=0, write_failed=0,
@@ -140,6 +158,60 @@ class PreparationReceiptTests(unittest.TestCase):
     def test_changed_compiler_observation_invalidates_context(self):
         self.libraries['compiler_observation']['version'] = 'different compiler'
         self.reject('library compiler context differs from its observation')
+
+    def test_schema_one_compiler_context_cannot_be_prepared(self):
+        self.libraries['compiler_context_schema'] = 1
+        self.reject('requires compiler observation and context schema 2')
+
+    def test_schema_one_observation_cannot_be_prepared(self):
+        self.libraries['compiler_observation']['observation_schema'] = 1
+        self.reject('requires compiler observation and context schema 2')
+
+    def test_legacy_launcher_only_identity_returns_structured_error(self):
+        observation = self.libraries['compiler_observation']
+        for field in ('tool_components', 'required_files', 'host_identity', 'effective_invocations', 'observation_schema'):
+            observation.pop(field)
+        self.libraries.pop('compiler_context_schema')
+        result = self.reject('compiler observation identity is invalid')
+        self.assertTrue(any('component or host identities' in error for error in result['errors']))
+
+    def test_missing_frontend_identity_returns_structured_error(self):
+        observation = self.libraries['compiler_observation']
+        observation['tool_components'] = [item for item in observation['tool_components'] if item['role'] != 'frontend']
+        self.reject('compiler observation identity is invalid')
+
+    def test_missing_linker_identity_returns_structured_error(self):
+        observation = self.libraries['compiler_observation']
+        observation['tool_components'] = [item for item in observation['tool_components'] if item['role'] != 'linker']
+        self.reject('compiler observation identity is invalid')
+
+    def test_missing_local_dependency_hash_returns_structured_error(self):
+        self.libraries['compiler_observation']['tool_components'][1]['dependencies'][0].pop('sha256')
+        self.reject('compiler dependency lacks content identity')
+
+    def test_missing_dependency_audit_returns_structured_error(self):
+        self.libraries['compiler_observation']['tool_components'][0].pop('dependencies')
+        self.reject('lacks dependency audit')
+
+    def test_missing_static_library_hash_returns_structured_error(self):
+        self.libraries['compiler_observation']['required_files'][0].pop('sha256')
+        self.reject('compiler invocation input lacks content identity')
+
+    def test_missing_required_file_inventory_returns_structured_error(self):
+        self.libraries['compiler_observation'].pop('required_files')
+        self.reject('compiler observation identity is invalid')
+
+    def test_missing_system_host_binding_returns_structured_error(self):
+        self.libraries['compiler_observation']['host_identity'].pop('os_build')
+        self.reject('compiler observation identity is invalid')
+
+    def test_mismatched_system_host_binding_returns_structured_error(self):
+        self.libraries['compiler_observation']['tool_components'][0]['dependencies'][0]['os_build'] = 'other-build'
+        self.reject('compiler dependency lacks system identity')
+
+    def test_malformed_component_returns_structured_error(self):
+        self.libraries['compiler_observation']['tool_components'] = [None]
+        self.reject('compiler observation identity is invalid')
 
     def test_observed_specializations_are_counted_separately(self):
         self.add_observed_cache()
