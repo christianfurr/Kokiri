@@ -103,8 +103,8 @@ class ResumeFixture:
                             TOTK_SEED_DEPTH_MODE='minus-w', TOTK_SHADER_SEED='off', TOTK_RT_BG_WORKERS='1',
                             TOTK_SHADER_SERVICE='native', TOTK_XLATE_SPIRV_CROSS='inproc', TOTK_SEED_VERIFY='1'))
             if historical:
-                child.update(log=str(log_path), log_sha256=seed.sha256(log_path),
-                             verified_path=str(verified_path), verified_sha256=seed.sha256(verified_path))
+                completion.update(log=str(log_path), log_sha256=seed.sha256(log_path),
+                                  verified_path=str(verified_path), verified_sha256=seed.sha256(verified_path))
             write(child_path, child)
             self.child_values.append((child_path, child))
             entry = dict(batch=number, receipt=str(child_path), receipt_sha256=seed.sha256(child_path), result='batch-complete-only')
@@ -194,12 +194,25 @@ class ResumeTests(unittest.TestCase):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as folder:
                 fixture = ResumeFixture(Path(folder))
                 if failure == 'null-hash':
-                    fixture.child_values[0][1]['log_sha256'] = None; fixture.refresh()
+                    fixture.child_values[0][1]['completion']['log_sha256'] = None; fixture.refresh()
                 elif failure == 'old-log':
                     (fixture.child_values[0][0].parent/'native.log').write_text('different historical log')
                 else:
                     fixture.proof_values[0][1]['batch_plans'] = []; fixture.refresh()
                 with self.assertRaisesRegex(ValueError, 'pinned hash|hash differs|immutable partition plan'):
+                    fixture.reconcile()
+
+    def test_historical_completion_hashes_cannot_be_ignored_by_legacy_optin(self):
+        for failure in ('corrupt-log-hash', 'corrupt-verified-hash', 'only-one-hash'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as folder:
+                fixture = ResumeFixture(Path(folder))
+                for window in fixture.plan['windows']: window['allow_import_time_corroboration'] = True
+                completion = fixture.child_values[0][1]['completion']
+                if failure == 'corrupt-log-hash': completion['log_sha256'] = '0'*64
+                elif failure == 'corrupt-verified-hash': completion['verified_sha256'] = '0'*64
+                else: completion.pop('verified_sha256')
+                fixture.refresh()
+                with self.assertRaisesRegex(ValueError, 'hash differs|incomplete historical'):
                     fixture.reconcile()
 
     def test_stale_runtime_context_index_output_binding_and_log_are_rejected(self):

@@ -192,19 +192,19 @@ def reconcile_plan(plan_path, *, expected_identity, corpus, shader_list, cache, 
                 if proof.get('inputs', {}).get(path, {}).get('sha256') != expected[field]:
                     raise ValueError('resume child executable context differs; real request revalidation required')
             attempt = Path(entry['receipt']).parent
-            log_path = Path(child.get('log', attempt/'native.log'))
-            verified_path = Path(child.get('verified_path', attempt/'verified.txt'))
-            historical = 'log_sha256' in child and 'verified_sha256' in child
-            if ('log_sha256' in child) != ('verified_sha256' in child):
+            completion = child.get('completion', {})
+            log_path = Path(completion.get('log', attempt/'native.log'))
+            verified_path = Path(completion.get('verified_path', attempt/'verified.txt'))
+            historical = 'log_sha256' in completion and 'verified_sha256' in completion
+            if ('log_sha256' in completion) != ('verified_sha256' in completion):
                 raise ValueError('resume child has incomplete historical log/verified hash evidence')
             if not historical and reference.get('allow_import_time_corroboration') is not True:
                 raise ValueError('resume legacy child requires explicit import-time corroboration admission')
-            log, log_sha = read(log_path, child['log_sha256']) if historical else read(log_path)
-            names_text, names_sha = read(verified_path, child['verified_sha256']) if historical else read(verified_path)
+            log, log_sha = read(log_path, completion['log_sha256']) if historical else read(log_path)
+            names_text, names_sha = read(verified_path, completion['verified_sha256']) if historical else read(verified_path)
             names = set(names_text.split())
             actual = seed.batch_completion(log, partition['keys'], names, True, 0,
                                            expected_listed_requests=partition['listed_requests'])
-            completion = child.get('completion', {})
             if any(completion.get(field) != actual[field] for field in COUNT_FIELDS) or set(completion.get('keys', [])) != set(partition['keys']):
                 raise ValueError('resume native reports disagree with ledger-bound completion counts')
             outputs, _ = seed.verified_batch_outputs(Path(cache), names, partition['keys'], jobs)
