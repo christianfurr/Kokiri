@@ -173,3 +173,14 @@ uses synthetic counters and a tiny diagnostic executable; it cannot establish
 full v28 game preparation, visual correctness, game relaunch or production
 Sparkle installation. Keep those acceptance results and exact candidate hashes
 in Integration's private evidence, separate from local source tests.
+
+On 2026-11-15 the serialized diagnostic run passed: signed source packaging,
+strict code-signature validation, staging, actual diagnostic relaunch, rollback
+and baseline relaunch, with original app/workspace preservation. Both observed
+processes exited after PID/UID/path/kernel-birth verification. The real retained
+manifest rejected changed bytes and a wrong signing key; the retained source ZIP
+rejected modification before extraction. Signing produced distinct pre-seal and
+final executable hashes, as required by the builder contract. The sanitized
+[verification record](runtime-verification.json) pins those artifact identities.
+Its preparation counters are synthetic; it proves the update transaction and
+diagnostic launches, not actual game or production distribution acceptance.
