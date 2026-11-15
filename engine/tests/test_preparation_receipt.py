@@ -35,6 +35,7 @@ class PreparationReceiptTests(unittest.TestCase):
                            available_macos_sdk={'path': '/private/sdk', 'version': '26.0'})
         observation.update(
             observation_schema=2,
+            working_directory='/private',
             loader_environment_policy='reject-nonempty-DYLD',
             host_identity=dict(os_build='fixture-build', machine='arm64', kernel_release='fixture-kernel'),
             tool_components=[
@@ -285,6 +286,10 @@ class PreparationReceiptTests(unittest.TestCase):
     def test_missing_loader_environment_policy_returns_structured_error(self):
         self.libraries['compiler_observation'].pop('loader_environment_policy')
         self.reject('compiler observation identity is invalid')
+
+    def test_missing_canonical_compiler_cwd_returns_structured_error(self):
+        self.libraries['compiler_observation'].pop('working_directory')
+        self.reject('compiler working directory is missing or noncanonical')
 
     def test_wrong_loader_environment_policy_returns_structured_error(self):
         self.libraries['compiler_observation']['loader_environment_policy'] = 'unqualified'

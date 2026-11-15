@@ -15,6 +15,11 @@ CONFLICTING_COMPILE_FLAGS = frozenset(('-fno-wrapv', '-fno-preserve-invariance',
                                       '-ffast-math', '-funsafe-math-optimizations'))
 
 
+def compiler_working_directory(metal):
+    """A stable real directory, shared by observation and every codegen attempt."""
+    return str(Path(metal).resolve().parent)
+
+
 def validate_driver_flags(flags):
     if (not isinstance(flags, list) or len(flags) != len(QUALIFIED_DRIVER_FLAGS) or
         any(not isinstance(flag, str) for flag in flags) or set(flags) != set(QUALIFIED_DRIVER_FLAGS)):
@@ -130,7 +135,7 @@ def compiler_context_key(observation):
     """
     context = {key: observation.get(key) for key in (
         'qualified', 'backend', 'version', 'executable_sha256',
-        'effective_flags', 'effective_target', 'sdk_mode')}
+        'effective_flags', 'effective_target', 'sdk_mode', 'working_directory')}
     context['schema'] = 'kokiri-metal-compiler-context-v2'
     context['resource_headers_sha256'] = observation.get('resource_headers', {}).get('content_sha256')
     if not observation.get('qualified'):
@@ -161,6 +166,10 @@ def compiler_context_key(observation):
             not isinstance(observation.get('effective_target'), str) or not observation['effective_target'] or
             observation.get('sdk_mode') != 'compiler-default-resource-headers'):
             raise ValueError('qualified Metal compiler observation lacks component or host identities')
+        cwd = observation.get('working_directory')
+        if (not isinstance(cwd, str) or not Path(cwd).is_absolute() or str(Path(cwd).resolve()) != cwd
+                or cwd != compiler_working_directory(components[0]['path'])):
+            raise ValueError('qualified Metal compiler working directory is missing or noncanonical')
         if observation.get('loader_environment_policy') != 'reject-nonempty-DYLD':
             raise ValueError('qualified Metal compiler observation lacks the required loader environment policy')
         context['loader_environment_policy'] = observation['loader_environment_policy']
@@ -178,6 +187,13 @@ def compiler_context_key(observation):
             if role == 'frontend':
                 if argv.count('-triple') != 1 or argv.index('-triple')+1 >= len(argv) or argv[argv.index('-triple')+1] != observation.get('effective_target'):
                     raise ValueError('selected frontend target differs from compiler observation')
+            for at, argument in enumerate(argv):
+                for option in ('-fcoverage-compilation-dir', '-fdebug-compilation-dir'):
+                    if argument == option:
+                        if at+1 >= len(argv) or argv[at+1] != cwd:
+                            raise ValueError('emitted compiler working directory differs from canonical observation')
+                    elif argument.startswith(option+'=') and argument[len(option)+1:] != cwd:
+                        raise ValueError('emitted compiler working directory differs from canonical observation')
         planned_outputs = {argv[index+1] for argv in invocations for index, arg in enumerate(argv[:-1]) if arg == '-o'}
         selected_inputs = {arg for argv in invocations for arg in argv[1:] if Path(arg).is_absolute() and
                            Path(arg).suffix in ('.a', '.dylib', '.tbd', '.bc') and arg not in planned_outputs}
@@ -228,9 +244,12 @@ def compiler_context_key(observation):
 
 def compiler_observation(metal, version, env, flags):
     """Record what this driver actually chooses; JIT equivalence is not implied."""
+    metal = str(Path(metal).resolve())
+    working_directory = compiler_working_directory(metal)
     if not Path(metal).is_file():
         return dict(qualified=False, backend='metal', version=version, effective_flags=list(flags),
                     effective_target=None, sdk_mode='unobserved',
+                    working_directory=working_directory,
                     reason='compiler executable unavailable')
     overrides = sorted(key for key, value in env.items() if key.startswith('DYLD_') and value)
     if overrides:
@@ -242,7 +261,7 @@ def compiler_observation(metal, version, env, flags):
         source, output = Path(folder)/'identity.metal', Path(folder)/'identity.partial'
         source.write_text('')
         command=[metal,'-###',*flags,'-o',str(output),str(source)]
-        result=subprocess.run(command,capture_output=True,text=True,env=env)
+        result=subprocess.run(command,capture_output=True,text=True,env=env,cwd=working_directory)
     if result.returncode:
         raise ValueError('cannot observe Metal compiler target: '+result.stderr)
     triples=re.findall(r'"-triple" "([^"]+)"',result.stderr)
@@ -298,6 +317,7 @@ def compiler_observation(metal, version, env, flags):
     observation = dict(qualified=True,backend='metal',path=str(Path(metal).resolve()),version=version,
                 executable_sha256=components[0]['executable_sha256'],
                 effective_flags=list(flags),effective_target=triples[0],driver_command=command,
+                working_directory=working_directory,
                 driver_plan=result.stderr,driver_plan_sha256=hashlib.sha256(result.stderr.encode()).hexdigest(),
                 resource_dir=resources[0],resource_headers=headers,
                 observation_schema=2,tool_components=components,required_files=required,

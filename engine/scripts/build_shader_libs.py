@@ -22,7 +22,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from metal_toolchain import METAL_FLAGS as BASE_METAL_FLAGS, metal_compiler, compiler_observation, compiler_context_key   # noqa: E402
+from metal_toolchain import METAL_FLAGS as BASE_METAL_FLAGS, metal_compiler, compiler_observation, compiler_context_key, compiler_working_directory   # noqa: E402
 from prepare_shader_seed import CHAIN   # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'dev'))
 from game_slot import GameSlot
@@ -123,13 +123,23 @@ def main():
     p.add_argument('--jobs', type=int, default=4)
     p.add_argument('--only', type=Path, help='compile only these shaders (one 64-hex key per line); the rest are compiled by the game at first use')
     a = p.parse_args()
+    # Capture invocation-relative inputs before any compiler subprocess uses a
+    # different directory. The Python process never changes its own directory.
+    a.cache = [path.expanduser().resolve() for path in a.cache]
+    a.variant_cache = [path.expanduser().resolve() for path in a.variant_cache]
+    a.out = a.out.expanduser().resolve()
+    a.only = a.only.expanduser().resolve() if a.only else None
     if not 1 <= a.jobs <= 32:
         p.error('--jobs must be between 1 and 32')
     found = metal_compiler()
     if not found:
         sys.exit('[RED] no Metal compiler (Xcode -> Settings -> Components: Metal Toolchain)')
     metal, compiler, env = found
+    metal = str(Path(metal).resolve())
+    working_directory = compiler_working_directory(metal)
     observation=compiler_observation(metal,compiler,env,METAL_FLAGS)
+    if observation.get('working_directory') != working_directory:
+        raise ValueError('compiler observation and codegen working directories differ')
     source_files = {}
     for cache in a.cache:
         for src in sorted(cache.glob('*_b.metal')):
@@ -199,7 +209,7 @@ def main():
     def compile_one(item):
         digest, src = item
         partial = a.out/f'{digest}.partial'
-        r = subprocess.run([metal, *METAL_FLAGS, '-o', partial, src], capture_output=True, text=True, env=env)
+        r = subprocess.run([metal, *METAL_FLAGS, '-o', partial, src], capture_output=True, text=True, env=env,cwd=working_directory)
         parser_depth = None
         if r.returncode and 'bracket nesting level exceeded maximum of 256' in r.stderr:
             # Two genuine OOT shaders have deeper structured control flow. This
@@ -207,7 +217,7 @@ def main():
             partial.unlink(missing_ok=True)
             parser_depth = 1024
             r = subprocess.run([metal, *METAL_FLAGS, '-fbracket-depth=1024', '-o', partial, src],
-                               capture_output=True, text=True, env=env)
+                               capture_output=True, text=True, env=env,cwd=working_directory)
         if r.returncode:
             partial.unlink(missing_ok=True)
             (a.out/f'{digest}.metallib').unlink(missing_ok=True)

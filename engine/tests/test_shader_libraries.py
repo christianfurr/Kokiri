@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import subprocess
+import shutil
 import unittest
 from unittest import mock
 
@@ -20,6 +21,7 @@ class LibraryTests(unittest.TestCase):
     def qualified_observation(self):
         return dict(qualified=True, backend='metal', version='fixture',
                     observation_schema=2,
+                    working_directory='/private',
                     loader_environment_policy='reject-nonempty-DYLD',
                     executable_sha256='a'*64, effective_target='air64-apple-macosx26.0',
                     effective_flags=libraries.METAL_FLAGS, sdk_mode='compiler-default-resource-headers',
@@ -52,8 +54,10 @@ class LibraryTests(unittest.TestCase):
             def driver(command, **kwargs):
                 if '-###' in command:
                     self.assertNotIn('-c', command)
+                    self.assertEqual(kwargs['cwd'],str(compiler.resolve().parent))
                     plan = (f'"{frontend}" "-cc1" "-triple" "air64-apple-macosx26.0" "-resource-dir" "{resource}" '
                             '"-fwrapv" "-fpreserve-invariance" '
+                            f'"-fcoverage-compilation-dir={kwargs["cwd"]}" "-fdebug-compilation-dir={kwargs["cwd"]}" '
                             f'"-o" "/tmp/identity-abcd.air" "{command[-1]}"\n'
                             f'"{linker}" "-o" "{command[command.index("-o")+1]}" "/tmp/identity-abcd.air" "{archive}"')
                     return subprocess.CompletedProcess(command, 0, '', plan)
@@ -74,6 +78,8 @@ class LibraryTests(unittest.TestCase):
                 dependency.write_bytes(b'changed dynamically loaded library')
                 fifth = toolchain.compiler_observation(str(compiler), 'same-version', {}, libraries.METAL_FLAGS)
             self.assertEqual(first['executable_sha256'], hashlib.sha256(compiler.read_bytes()).hexdigest())
+            self.assertEqual(first['working_directory'],str(compiler.resolve().parent))
+            self.assertIn('-fcoverage-compilation-dir='+first['working_directory'],first['effective_invocations'][0])
             self.assertEqual(first['resource_headers']['files'], 1)
             self.assertNotEqual(libraries.compiler_context_key(first), libraries.compiler_context_key(second))
             self.assertEqual([component['role'] for component in first['tool_components']], ['driver', 'frontend', 'linker'])
@@ -123,7 +129,7 @@ class LibraryTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, '', '')
 
                 with mock.patch.object(sys, 'argv', ['build_shader_libs.py', '--cache', str(cache), '--out', str(out)]), \
-                     mock.patch.object(libraries, 'metal_compiler', return_value=('unused', 'fixture', {})), \
+                     mock.patch.object(libraries, 'metal_compiler', return_value=('/private/fixture-driver', 'fixture', {})), \
                      mock.patch.object(libraries, 'compiler_observation', return_value=changed), \
                      mock.patch.object(libraries, 'GameSlot', return_value=contextlib.nullcontext()), \
                      mock.patch.object(libraries.subprocess, 'run', side_effect=compile_fixture) as compile_call:
@@ -177,12 +183,41 @@ class LibraryTests(unittest.TestCase):
         previous_key = hashlib.sha256(json.dumps(context_without_policy, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         self.assertNotEqual(key, previous_key)
 
-    def test_recorded_working_directory_is_conservatively_bound(self):
+    def test_recorded_canonical_working_directory_is_bound(self):
         first = self.qualified_observation()
         second = self.qualified_observation()
-        first['effective_invocations'][0].append('-fcoverage-compilation-dir=/first/checkout')
-        second['effective_invocations'][0].append('-fcoverage-compilation-dir=/relocated/checkout')
+        second['tool_components'][0]['path']='/relocated/fixture-driver'
+        second['working_directory']='/relocated'
         self.assertNotEqual(libraries.compiler_context_key(first), libraries.compiler_context_key(second))
+
+    def test_missing_noncanonical_or_wrong_driver_cwd_is_rejected(self):
+        for cwd in (None,'relative/path','/private/elsewhere/..','/different'):
+            with self.subTest(cwd=cwd):
+                observation=self.qualified_observation();observation['working_directory']=cwd
+                with self.assertRaisesRegex(ValueError,'working directory'):
+                    libraries.compiler_context_key(observation)
+
+    def test_canonical_cwd_and_emitted_cwd_arguments_are_bound_without_stripping(self):
+        observation=self.qualified_observation()
+        observation['effective_invocations'][0].extend(
+            ['-fcoverage-compilation-dir=/private','-fdebug-compilation-dir','/private'])
+        with mock.patch.object(toolchain.json,'dumps',wraps=json.dumps) as encode:
+            key=libraries.compiler_context_key(observation)
+        context=encode.call_args.args[0]
+        self.assertEqual(context['working_directory'],'/private')
+        self.assertEqual(context['effective_invocations'],observation['effective_invocations'])
+        without_cwd={name:value for name,value in context.items() if name!='working_directory'}
+        old_key=hashlib.sha256(json.dumps(without_cwd,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        self.assertNotEqual(key,old_key)
+
+    def test_emitted_working_directory_cannot_drift_from_actual_cwd(self):
+        for arguments in (['-fcoverage-compilation-dir=/old/worktree'],
+                          ['-fdebug-compilation-dir','/old/worktree']):
+            with self.subTest(arguments=arguments):
+                observation=self.qualified_observation()
+                observation['effective_invocations'][0].extend(arguments)
+                with self.assertRaisesRegex(ValueError,'emitted compiler working directory'):
+                    libraries.compiler_context_key(observation)
 
     def test_qualified_driver_policy_rejects_overrides_duplicates_and_extra_options(self):
         for extra in ('-fno-wrapv', '-fno-preserve-invariance', '-ffast-math', '-fwrapv', '-unknown-option'):
@@ -282,7 +317,7 @@ class LibraryTests(unittest.TestCase):
                 with self.assertRaises(SystemExit) as result:
                     libraries.main()
                 self.assertEqual(result.exception.code, 0)
-            self.assertCountEqual(compiled, [base, patched])
+            self.assertCountEqual(compiled, [base.resolve(), patched.resolve()])
             manifest = json.loads((out/'libraries-manifest.json').read_text())
             self.assertTrue(manifest['complete'])
             self.assertEqual(manifest['sources'][patched.name], patched.stem)
@@ -291,6 +326,82 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual(provenance['identity']['chain'], libraries.CHAIN)
             self.assertEqual(provenance['identity_sha256'], libraries.digest(runtime/'pipelines/identity.json'))
             self.assertEqual(provenance['sources'], {patched.name: patched.stem})
+
+    def test_relocated_caller_and_sources_reuse_libraries_under_canonical_context(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve();callers=[root/'first-caller',root/'relocated-caller']
+            source_name='a'*64+'-'+'b'*12+'_b.metal'
+            for caller in callers:
+                (caller/'cache').mkdir(parents=True)
+                (caller/'cache'/source_name).write_text('kernel void base() {}')
+                runtime=self.runtime_cache(caller)
+                self.variant(runtime)
+                (caller/'selected.txt').write_text('a'*64+'\n')
+            observation=self.qualified_observation();calls=[]
+            def compile_fixture(command,**kwargs):
+                self.assertEqual(kwargs['cwd'],observation['working_directory'])
+                self.assertTrue(Path(command[-1]).is_absolute())
+                self.assertTrue(Path(command[command.index('-o')+1]).is_absolute())
+                calls.append(Path(command[-1]))
+                Path(command[command.index('-o')+1]).write_bytes(b'fixture-library:'+Path(command[-1]).read_bytes())
+                return subprocess.CompletedProcess(command,0,'','')
+            argv=['build_shader_libs.py','--cache','cache','--variant-cache','runtime',
+                  '--only','selected.txt','--out','libs','--jobs','1']
+            with mock.patch.object(sys,'argv',argv), \
+                 mock.patch.object(libraries,'metal_compiler',return_value=('/private/fixture-driver','fixture',{})), \
+                 mock.patch.object(libraries,'compiler_observation',return_value=observation), \
+                 mock.patch.object(libraries,'GameSlot',return_value=contextlib.nullcontext()), \
+                 mock.patch.object(libraries.subprocess,'run',side_effect=compile_fixture) as compile_call:
+                with contextlib.chdir(callers[0]):
+                    with self.assertRaises(SystemExit) as done:libraries.main()
+                    self.assertEqual(done.exception.code,0)
+                    self.assertEqual(Path.cwd(),callers[0])
+                self.assertEqual(len(calls),2)
+                first=json.loads((callers[0]/'libs/libraries-manifest.json').read_text())
+                shutil.copytree(callers[0]/'libs',callers[1]/'libs')
+                compile_call.reset_mock()
+                with contextlib.chdir(callers[1]):
+                    with self.assertRaises(SystemExit) as done:libraries.main()
+                    self.assertEqual(done.exception.code,0)
+                    self.assertEqual(Path.cwd(),callers[1])
+                compile_call.assert_not_called()
+            second=json.loads((callers[1]/'libs/libraries-manifest.json').read_text())
+            self.assertEqual(first['compiler_context_sha256'],second['compiler_context_sha256'])
+            self.assertEqual(second['compiler_observation']['working_directory'],'/private')
+            self.assertEqual(first['files'],second['files'])
+
+    def test_codegen_and_parser_retry_use_observed_canonical_cwd(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve();cache=root/'cache';cache.mkdir()
+            (cache/'fixture_b.metal').write_text('kernel void base() {}')
+            calls=[]
+            def compile_fixture(command,**kwargs):
+                calls.append((command,kwargs['cwd']))
+                if len(calls)==1:
+                    return subprocess.CompletedProcess(command,1,'','bracket nesting level exceeded maximum of 256')
+                self.assertIn('-fbracket-depth=1024',command)
+                Path(command[command.index('-o')+1]).write_bytes(b'fixture-library')
+                return subprocess.CompletedProcess(command,0,'','')
+            with mock.patch.object(sys,'argv',['build_shader_libs.py','--cache',str(cache),'--out',str(root/'libs')]), \
+                 mock.patch.object(libraries,'metal_compiler',return_value=('/private/fixture-driver','fixture',{})), \
+                 mock.patch.object(libraries,'compiler_observation',return_value=self.qualified_observation()), \
+                 mock.patch.object(libraries,'GameSlot',return_value=contextlib.nullcontext()), \
+                 mock.patch.object(libraries.subprocess,'run',side_effect=compile_fixture):
+                with self.assertRaises(SystemExit) as done:libraries.main()
+                self.assertEqual(done.exception.code,0)
+            self.assertEqual([cwd for _,cwd in calls],['/private','/private'])
+            self.assertTrue(all(Path(command[-1]).is_absolute() for command,_ in calls))
+
+    def test_observation_codegen_cwd_disagreement_fails_before_compile(self):
+        with tempfile.TemporaryDirectory() as folder:
+            observation=self.qualified_observation();observation['working_directory']='/different'
+            with mock.patch.object(sys,'argv',['build_shader_libs.py','--cache',folder,'--out',folder+'/libs']), \
+                 mock.patch.object(libraries,'metal_compiler',return_value=('/private/fixture-driver','fixture',{})), \
+                 mock.patch.object(libraries,'compiler_observation',return_value=observation), \
+                 mock.patch.object(libraries.subprocess,'run') as compile_call:
+                with self.assertRaisesRegex(ValueError,'observation and codegen working directories differ'):
+                    libraries.main()
+                compile_call.assert_not_called()
 
     def test_old_chain_is_rejected_even_with_valid_source_hash(self):
         with tempfile.TemporaryDirectory() as folder:

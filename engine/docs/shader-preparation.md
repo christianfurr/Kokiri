@@ -100,6 +100,13 @@ cache tree before and after verification. Missing fields in an older runtime
 cannot establish preparation. Embedded host/support shader and OS/driver code
 generation is outside the translated-library JIT counter.
 
+Offline compiler observation and every compilation attempt use the selected
+driver's resolved parent directory as their explicit working directory. CLI
+input/output paths are resolved before compilation; the Python process keeps
+its invocation directory. Schema 2 binds `working_directory` and retains emitted
+directory arguments, so a staged source clone does not change compiler identity
+merely through its caller directory. Toolchain location changes remain bound.
+
 The app-relative proof is
 `Contents/Resources/totk/build/game-data/oot/preparation-receipt.json`; the native
 verification report is `Contents/Resources/totk/build/pipelines/compute-manifest.json`.
