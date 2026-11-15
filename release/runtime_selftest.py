@@ -64,30 +64,64 @@ int main(void) {
 # The source archive contains only this diagnostic builder, notices and a test
 # chain. Its counters and data are synthetic. It cannot prepare or run the game.
 BUILDER = r'''
-import argparse, hashlib, json, plistlib, shutil, subprocess
+import argparse, hashlib, json, plistlib, shutil, subprocess, sys
 from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('--rebuild');p.add_argument('--out');p.add_argument('--work');p.add_argument('--jobs');a=p.parse_args()
 source=Path(__file__).resolve().parents[1]
 record=json.loads((source/'kokiri-source-release.json').read_text())
+sys.path.insert(0,str(source/'engine/scripts'))
+from metal_toolchain import compiler_context_key
+observation=json.loads((source/'engine/diagnostic-compiler-observation.json').read_text())
+compiler_context=compiler_context_key(observation)
 app=Path(a.out);shutil.copytree(a.rebuild,app)
 resources=app/'Contents/Resources';(resources/'fixture-version.txt').write_text('updated-fixture\n')
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 build=resources/'totk/build';artifacts={}
 for name,folder,filename in [('seed_manifest_sha256','shader-seed','seed-manifest.json'),('libraries_manifest_sha256','shader-libs','libraries-manifest.json'),('pipeline_manifest_sha256','pipelines','compute-manifest.json')]:
- target=build/folder;target.mkdir(parents=True,exist_ok=True);payload=target/'fixture-payload.txt';payload.write_text('synthetic-data-only\n');manifest=target/filename;manifest.write_text(json.dumps({'files':{payload.name:sha(payload)}}));artifacts[name]=sha(manifest)
+ target=build/folder;target.mkdir(parents=True,exist_ok=True);payload=target/'fixture-payload.txt';payload.write_text('synthetic-data-only\n');manifest=target/filename;metadata={'files':{payload.name:sha(payload)}}
+ if folder=='shader-libs':metadata.update(compiler_context_schema=2,compiler_context_sha256=compiler_context,compiler_observation=observation)
+ manifest.write_text(json.dumps(metadata));artifacts[name]=sha(manifest)
 index=build/'pipelines/pipelines-fixture.tsv';index.write_text('synthetic-index\n');artifacts['pipeline_index_sha256']=sha(index)
 executable=app/'Contents/MacOS/KokiriGame';artifacts['runtime_sha256']=sha(executable)
 counts={'requested':1,'completed':1,'failed':0}
 receipt={'schema':'kokiri-preparation-receipt-v1','mode':'full','prepared':True,'errors':[],
  'identity':{'source_commit':record['source_commit'],'chain':record['shader_chain'],'runtime_sha256':sha(executable),'runtime_hash_scope':'pre-seal build executable; final signed bytes require an external package fingerprint','translation_context_sha256':'c'*64,'translator_sha256':'d'*64,'gpu_architecture':'fixture'},
  'variants':{'default':counts,'listed':{'requested':0,'completed':0,'failed':0},'unique_completed':1},
- 'libraries':counts,'pipelines':dict(counts,write_failed=0,unaccounted=0),'artifact_sha256':artifacts}
+ 'libraries':counts,'pipelines':dict(counts,write_failed=0,unaccounted=0),'artifact_sha256':artifacts,
+ 'compiler_context_schema':2,'compiler_context_sha256':compiler_context,'compiler_observation':observation}
 path=build/'game-data/oot/preparation-receipt.json';path.parent.mkdir(parents=True);path.write_text(json.dumps(receipt))
 info_path=app/'Contents/Info.plist';info=plistlib.loads(info_path.read_bytes());info.update(KokiriPrepared=True,KokiriShaders='full',KokiriSourceCommit=record['source_commit'],KokiriPreparationReceiptSHA256=sha(path),KokiriBuildRuntimeSHA256=artifacts['runtime_sha256']);info_path.write_bytes(plistlib.dumps(info))
 subprocess.run(['/usr/bin/codesign','--force','--sign','-',str(app)],check=True)
 fingerprint={'schema':'kokiri-package-output-v1','app':str(app),'build_runtime_sha256':artifacts['runtime_sha256'],'signed_runtime_sha256':sha(executable),'info_sha256':sha(info_path),'code_resources_sha256':sha(app/'Contents/_CodeSignature/CodeResources'),'preparation_receipt_sha256':sha(path)}
 logs=Path(a.work)/'logs';logs.mkdir(exist_ok=True);(logs/'package-output.json').write_text(json.dumps(fingerprint))
 '''
+
+
+def compiler_observation_fixture():
+    """Structural test data, never evidence of observing a real compiler."""
+    base = '/private/kokiri-updater-fixture'
+    driver, frontend, linker = (base + '/' + role for role in ('driver', 'frontend', 'linker'))
+    archive = base + '/libmetal_rt_osx.a'
+    return dict(
+        observation_schema=2, qualified=True, backend='metal', version='synthetic fixture',
+        path=driver, executable_sha256='8' * 64,
+        effective_flags=['-mmacosx-version-min=26.0', '-fmetal-math-mode=safe', '-fpreserve-invariance', '-fwrapv'],
+        effective_target='air64-apple-macosx26.0.0', sdk_mode='compiler-default-resource-headers',
+        loader_environment_policy='reject-nonempty-DYLD',
+        resource_headers=dict(path=base + '/headers', content_sha256='7' * 64, files=1, bytes=1),
+        host_identity=dict(os_build='synthetic-fixture-os', machine='arm64', kernel_release='synthetic-fixture-kernel'),
+        tool_components=[
+            dict(role='driver', path=driver, size=100, executable_sha256='8' * 64, dependencies=[
+                dict(loader_sha256='8' * 64, install_name='/usr/lib/libSystem.B.dylib',
+                     binding='os-build-system-component', os_build='synthetic-fixture-os')]),
+            dict(role='frontend', path=frontend, size=200, executable_sha256='6' * 64, dependencies=[
+                dict(loader_sha256='6' * 64, install_name='@rpath/libCompiler.dylib', binding='hashed-file',
+                     sha256='5' * 64, path=base + '/libCompiler.dylib', size=50)]),
+            dict(role='linker', path=linker, size=300, executable_sha256='4' * 64, dependencies=[])],
+        required_files=[dict(role='selected-invocation-input', path=archive, size=123, sha256='3' * 64)],
+        effective_invocations=[
+            [frontend, '-cc1', '-triple', 'air64-apple-macosx26.0.0', '-o', '<intermediate.air>', '<probe-dir>/identity.metal'],
+            [linker, '<intermediate.air>', archive, '-o', '<probe-dir>/identity.partial']])
 
 
 def run(arguments, cwd=None):
@@ -186,6 +220,7 @@ def selftest(output):
     from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
     output = Path(output).resolve()
     runtime.require(not output.exists() and not output.is_relative_to(runtime.ROOT), 'Use a fresh external private test folder')
+    runtime.load_trusted_compiler_validator()
     runtime.game_closed()
     output.mkdir(mode=0o700)
     command_journal = output / 'commands.jsonl'
@@ -207,8 +242,11 @@ def selftest(output):
     run(['/usr/bin/codesign', '--force', '--sign', '-', app])
     original = runtime.inspect_app(app)
     repository = output / 'fixture-source'; repository.mkdir()
-    files = {'LICENSE':'MIT diagnostic fixture only\n', 'THIRD_PARTY_NOTICES.md':'No game data. Diagnostic update/relaunch fixture.\n',
+    files = {'LICENSE':(runtime.ROOT/'LICENSE').read_text(),
+             'THIRD_PARTY_NOTICES.md':(runtime.ROOT/'THIRD_PARTY_NOTICES.md').read_text(),
              'engine/build.py':BUILDER, 'engine/scripts/preparation_receipt.py':'# synthetic receipt fixture; no game preparation\n',
+             'engine/scripts/metal_toolchain.py':runtime.TRUSTED_COMPILER_HELPER.read_text(),
+             'engine/diagnostic-compiler-observation.json':json.dumps(compiler_observation_fixture()),
              'engine/third_party/d2r_gfx/gfx/nvn/dmsh_chain.h':'#define DMSH_CHAIN "oot-native-v28-updater-fixture" /* game: oot */\n'}
     for name, content in files.items():
         path = repository / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(content)
@@ -240,7 +278,8 @@ def selftest(output):
             runtime.require((work/'preserved-cache.txt').read_text()=='preserved-fixture\n','Original workspace changed')
             runtime.require(runtime.state(store)['highest_version']==1,'Rollback lowered replay protection')
         result = dict(schema=1, tested_at_utc=datetime.now(timezone.utc).isoformat(),
-                      fixture_only=True, game_assets_used=False, game_launched=False, production_ready=False,
+                      fixture_only=True, synthetic_compiler_observation=True,
+                      game_assets_used=False, game_launched=False, production_ready=False,
                       source_manifest_sha256=runtime.sha(manifest), source_archive_sha256=runtime.sha(archive),
                       baseline=original, candidate=staged['candidate'],
                       checks=['real signed source package','real strict code-signature verification','distinct pre-seal versus final signed byte hashes',

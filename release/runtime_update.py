@@ -27,11 +27,13 @@ import urllib.request
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+TRUSTED_COMPILER_HELPER = ROOT / 'engine/scripts/metal_toolchain.py'
 MAX_ARCHIVE = 128 << 20
 MAX_EXPANDED = 256 << 20
 RECEIPT = 'Contents/Resources/totk/build/game-data/oot/preparation-receipt.json'
 PRODUCT = 'com.christianfurr.kokiri.runtime'
 BUILD_HASH_SCOPE = 'pre-seal build executable; final signed bytes require an external package fingerprint'
+SUPPORTED_COMPILER_FLAGS = {'-mmacosx-version-min=26.0', '-fmetal-math-mode=safe', '-fpreserve-invariance', '-fwrapv'}
 DIGEST = re.compile(r'[0-9a-f]{64}')
 COMMIT = re.compile(r'[0-9a-f]{40}')
 
@@ -271,14 +273,63 @@ def inspect_app(app, record=None):
     require(type(receipt['variants'].get('unique_completed')) is int
             and receipt['variants']['unique_completed'] == receipt['libraries']['requested'],
             'Compiled library coverage differs from unique shader variants')
-    result['preparation_artifact_sha256'] = verify_preparation_artifacts(app, receipt)
+    result['preparation_artifact_sha256'] = verify_preparation_artifacts(app, receipt, qualify_compiler=True)
     result.update(version=record['version'], source_commit=record['source_commit'],
                   preparation_receipt_sha256=sha(app / RECEIPT), shader_chain=record['shader_chain'],
                   build_runtime_sha256=build_hash)
     return result
 
 
-def verify_preparation_artifacts(app, receipt):
+def load_trusted_compiler_validator():
+    helper = TRUSTED_COMPILER_HELPER
+    require(helper.is_file() and not helper.is_symlink(),
+            'Trusted compiler validator unavailable; integrate the schema-2 engine tooling')
+    spec = importlib.util.spec_from_file_location('kokiri_trusted_compiler_validator', helper)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    validator = getattr(module, 'compiler_context_key', None)
+    require(callable(validator), 'Trusted compiler validator lacks context support')
+    return validator
+
+
+def verify_compiler_context(receipt, libraries):
+    require(type(receipt.get('compiler_context_schema')) is int and receipt['compiler_context_schema'] == 2
+            and type(libraries.get('compiler_context_schema')) is int and libraries['compiler_context_schema'] == 2,
+            'Full preparation requires compiler context schema 2')
+    observation = receipt.get('compiler_observation')
+    require(isinstance(observation, dict) and observation.get('qualified') is True
+            and type(observation.get('observation_schema')) is int and observation['observation_schema'] == 2
+            and observation.get('backend') == 'metal', 'Qualified Metal compiler observation schema 2 required')
+    require(observation.get('loader_environment_policy') == 'reject-nonempty-DYLD',
+            'Compiler observation lacks the required loader-environment policy')
+    flags = observation.get('effective_flags')
+    require(isinstance(flags, list) and all(isinstance(flag, str) for flag in flags)
+            and len(flags) == len(SUPPORTED_COMPILER_FLAGS) and set(flags) == SUPPORTED_COMPILER_FLAGS
+            and isinstance(observation.get('effective_target'), str)
+            and re.search(r'-apple-macosx26\.0\.0(?:$|-)', observation['effective_target']),
+            'Compiler observation lacks required macOS target or correctness flags')
+    invocations = observation.get('effective_invocations')
+    require(isinstance(invocations, list)
+            and all(isinstance(argv, list) and all(isinstance(arg, str) for arg in argv) for argv in invocations),
+            'Compiler observation lacks effective invocations')
+    for argv in invocations:
+        require(not any(arg in {'-fno-wrapv', '-fno-preserve-invariance', '-ffast-math', '-funsafe-math-optimizations'}
+                        or arg.startswith('-fmetal-math-mode=') and arg != '-fmetal-math-mode=safe' for arg in argv),
+                'Compiler invocation overrides the required correctness policy')
+    require(observation == libraries.get('compiler_observation'), 'Compiler observation differs from library manifest')
+    context = receipt.get('compiler_context_sha256')
+    require(DIGEST.fullmatch(str(context)) and context == libraries.get('compiler_context_sha256'),
+            'Compiler context differs from library manifest')
+    validator = load_trusted_compiler_validator()
+    try:
+        expected = validator(observation)
+    except (ValueError, TypeError, AttributeError, KeyError) as error:
+        raise ValueError('Invalid qualified compiler observation') from error
+    require(context == expected, 'Compiler context digest does not match the recorded toolchain')
+    return context
+
+
+def verify_preparation_artifacts(app, receipt, *, qualify_compiler=False):
     arch = receipt['identity'].get('gpu_architecture')
     require(isinstance(arch, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', arch), 'Invalid GPU archive identity')
     build = app / 'Contents/Resources/totk/build'
@@ -294,6 +345,8 @@ def verify_preparation_artifacts(app, receipt):
         if name == 'pipeline_index_sha256':
             continue
         manifest = read_json(path, limit=32 << 20)
+        if name == 'libraries_manifest_sha256' and qualify_compiler:
+            verify_compiler_context(receipt, manifest)
         files = manifest.get('files')
         require(isinstance(files, dict) and files, 'Preparation artifact lacks payload hashes')
         for relative, digest in files.items():
@@ -412,6 +465,7 @@ def stage(root, manifest, signature, public_key, archive, current_app, work, pyt
     validate_store_location(root, work, current_app)
     current = state(root)
     record = verify_manifest(manifest, signature, public_key, current['highest_version'])
+    load_trusted_compiler_validator()
     pin_key(root, public_key)
     game_closed()
     baseline = inspect_app(current_app)

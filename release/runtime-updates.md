@@ -74,6 +74,24 @@ libraries and pipelines with no failures. The source list's 50,376 metadata
 rows are never interpreted as compiled shader totals. A complete receipt covers
 its requested corpus, not every possible future gameplay variant.
 
+Promotion also requires `compiler_context_schema: 2` in both the receipt and
+library manifest, an identical qualified `observation_schema: 2` Metal
+observation, and the matching computed context digest. The verifier imports
+`compiler_context_key` only from its trusted checkout's
+`engine/scripts/metal_toolchain.py`. Missing trusted tooling stops staging before
+building. It never imports a validator from downloaded source or queries the
+host compiler to reinterpret a historical observation. The shared validator
+binds the selected driver, frontend, linker, resource headers, static inputs,
+declared dependencies, effective invocations and host identity. Older
+launcher-only pilot observations cannot qualify a new prepared version.
+Qualified observations must also attest the `reject-nonempty-DYLD` loader
+environment policy; older policyless schema-2 proofs are rejected.
+The supported driver policy is exactly the macOS 26.0 deployment, safe math,
+preserve-invariance and wrapv options. Extra or duplicate driver flags and
+recorded frontend options that disable those correctness guarantees are refused.
+Previously retained, unchanged snapshots can still be selected for explicit
+recovery; that does not promote their old preparation evidence.
+
 `receipt.identity.runtime_sha256` and `artifact_sha256.runtime_sha256` identify
 the pre-seal build executable used for pipeline preparation, as explicitly
 stated by `runtime_hash_scope`. `KokiriBuildRuntimeSHA256` must match that input.
@@ -185,3 +203,7 @@ final executable hashes, as required by the builder contract. The sanitized
 [verification record](runtime-verification.json) pins those artifact identities.
 Its preparation counters are synthetic; it proves the update transaction and
 diagnostic launches, not actual game or production distribution acceptance.
+That historical run predates the compiler-context schema-2 promotion gate.
+The current diagnostic fixture supplies explicitly synthetic schema-2 data for
+future transaction tests; it has not been rerun natively under the new gate and
+does not establish real compiler qualification or shader preparation.
