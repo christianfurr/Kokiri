@@ -21,6 +21,12 @@ Import pinned public OoT source and reviewed fixes, with source-only copies of r
 5. Complete rendering/performance investigation and move verified fixes into the new runtime.
 6. Produce real screenshots, benchmark artifacts, README, credits, contribution guide and public repository metadata.
 7. Review, run source/native/service checks, test copied-profile gameplay, publish the independent source repository and a reviewable branch. Do not merge existing upstream PRs.
+8. Add the original Kokiri identity, custom in-game menu, and HUD position/scale/detail controls with real persisted runtime support.
+9. Open the game settings/HUD controls with L3 + R3, preserving the existing keyboard shortcut. Verify the chord and HUD during actual gameplay.
+
+## Latest steering
+
+The user requested closure of our MacNativeGames PRs. All three open PRs (#2180, #2181, #2206) were closed on 2026-11-15; further development belongs in Kokiri. The independent empty public repository has been created; source has not yet been pushed. Cloudflare CLI authentication is currently absent, so a deployed public catalog is not yet available.
 
 ## Verification
 

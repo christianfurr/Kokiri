@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.cf/
+.cloudflare/
+.dev.vars*
+.env*
+local/
+__pycache__/
+*.pyc

@@ -29,6 +29,9 @@ node_modules/
 *.sav
 *.log
 *.tsv
+!engine/assets/shader_list.tsv
+__pycache__/
+*.pyc
 engine/build/
 engine/rewritten/
 engine/prebuilt/

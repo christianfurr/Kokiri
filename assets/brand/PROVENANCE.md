@@ -1,0 +1,7 @@
+# Kokiri mark
+
+`kokiri-mark.png` is an original project asset generated with the built-in image-generation tool on 2026-11-15, then copied into this repository unchanged. It is not extracted from the game or the upstream project. The source image has transparency.
+
+Final prompt:
+
+> Use case: logo-brand. Asset type: original master logo mark for Kokiri, a polished native Mac gaming/recompiler application; suitable for a macOS app icon and GitHub README. Create one original, exceptionally clear symbol combining a capital K with a folded forest leaf. The K should emerge from two simple leaf-shaped diagonal strokes and a sturdy stem, an elegant memorable silhouette. Small warm brass seed detail at the junction, very restrained. Precise vector-like brand mark, crisp curved geometry, subtle crafted depth only within the mark, contemporary native Mac polish, no illustration scene. Mature, calm, practical. Deep pine green, fresh fern green, restrained warm brass accent. High contrast contours. Single centered large mark, generous clear padding, square canvas, fully transparent background. Mark must remain legible at 32 pixels. No enclosing app tile, no mockup, no text, no letters beyond the integrated K symbol. Entirely original identity; no Nintendo or Zelda logos, no Triforce triangles, no character faces, no swords, no Apple logo, no game screenshots, no watermark. One final mark only, not a sheet of variants. Genuine transparency.

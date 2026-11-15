@@ -1,0 +1,43 @@
+{
+  "tested_at_utc": "2026-11-15T08:50:09.808101+00:00",
+  "sparkle_version": "2.10.0",
+  "sparkle_artifact_sha256": "17e28312b8e18ab7cdbbe09a6fb28cc55a5479ec6c371dbc07cdecd2a14fd959",
+  "prepare_source_sha256": "fb86fa91432a69a6f6e46e45ade0f026d029742f21821900dd37ff60d592e877",
+  "selftest_source_sha256": "c4fe288d11b54c30e6f6a2b7dee4a7579734079e3faeb76bb709bf583e0bee77",
+  "checks_passed": 20,
+  "checks": [
+    "official Sparkle 2.10.0 artifact and signing-tool hashes",
+    "actual sign_update accepts valid full-archive signature",
+    "actual sign_update accepts valid embedded feed signature",
+    "actual sign_update rejects modified archive",
+    "actual sign_update rejects modified signed feed",
+    "actual sign_update rejects a different signing key",
+    "production rejects an unqualified development bundle",
+    "metadata rejects an HTTP feed",
+    "metadata rejects a non-shell product",
+    "metadata rejects an unsigned-feed policy",
+    "metadata rejects an invalid public key",
+    "bundle boundary rejects game data before packaging",
+    "framework boundary rejects files absent from official Sparkle",
+    "archive boundary rejects game data",
+    "app-pinned key mismatch refuses packaging",
+    "key material must have owner-only permissions",
+    "archive boundary rejects path traversal",
+    "unchanged build number refuses packaging",
+    "actual sign_update accepts generated delta signature",
+    "actual BinaryDelta reconstructs every new file and symlink"
+  ],
+  "fixture_versions": [
+    "0.1.0 (1)",
+    "0.1.1 (2)"
+  ],
+  "peak_workspace_bytes": 46268531,
+  "workspace_limit_bytes": 52428800,
+  "delta_signature_verified": true,
+  "production_key_created": false,
+  "keychain_modified": false,
+  "uploaded": false,
+  "installation_tested": false,
+  "runtime_update_tested": false,
+  "temporary_workspace_removed": true
+}

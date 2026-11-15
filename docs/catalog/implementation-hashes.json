@@ -1,0 +1,10 @@
+{
+  "native_client_sha256": "01efd3500028e31c265e38b49cd198ea810de66f9044b290ec7d3d4ddb8ffda0",
+  "native_fixture_sha256": "7ceadca1ea2f061ef85fc027bd0dc7ffe9008ce1d3e8a93ca46123afc3eab886",
+  "protocol_sha256": "c0b8030a45517dbe6da5a265c70903a3826a82766f40350c3a1bec15a7b41c72",
+  "worker_sha256": "ae6b182eecaa750e540588bb655df2c0f544f2b61f903bc83351af4efad397e0",
+  "migration_sha256": "6dc9bbcad72042356a90c0245d577e4af00e03867d5493b2e162252dbc15fb85",
+  "typescript_client_sha256": "bcf98856b39e10d0489c0ba81ec4280c781af231459643617857f8335c0cdb82",
+  "python_client_sha256": "95e3af3ee5ed774e8b93c2181bf2f4a8381ecc34c74fb261e401cda1fe0d6002",
+  "scope": "Local implementation and fixtures only. No production endpoint or key, no remote upload/deploy."
+}

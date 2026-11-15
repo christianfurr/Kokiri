@@ -1,0 +1,64 @@
+name: Source and native app checks
+on: [push, pull_request]
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  public-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.14'
+      - run: python scripts/check_publication.py --staged
+      - run: python -m unittest discover -s tests -v
+      - run: python -I -m unittest discover -s engine/tests -p test_standalone_build.py -v
+      - name: Parse public Python source
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          paths = list(Path('engine').rglob('*.py')) + list(Path('scripts').glob('*.py'))
+          for path in paths:
+              ast.parse(path.read_text(), filename=str(path))
+          print(f'{len(paths)} Python sources parsed')
+          PY
+  catalog:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/catalog
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+  native-app:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: bash macos/test.sh
+      - run: bash macos/build.sh
+      - run: python3 -I -m unittest discover -s engine/tests -p test_oot_live_bridge.py -v
+      - name: Check actual runtime UI source
+        run: >-
+          xcrun clang -fsyntax-only -std=c11 -Wall -Wextra -Werror
+          -Wno-deprecated-declarations -fobjc-arc -DGAME_OOT=1 -DGAME_NS2=1
+          -Iengine/third_party/d2r_gfx/gfx/nvn/include engine/runtime/frontend.m
