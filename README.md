@@ -9,7 +9,7 @@
 
 Kokiri brings the **Nintendo Switch 2 edition of Ocarina of Time** to Apple silicon Macs, with a native launcher, custom in-game settings and a configurable performance HUD. It builds on the credited [MacNativeGames](https://github.com/ly05010419/MacNativeGames) native ARM64 and Metal runtime. You build the game locally from your own files.
 
-**Development preview.** There is no stable release yet. Gameplay verification and performance work are ongoing; major FPS drops, cold compilation stalls, high memory use and Death Mountain rendering corruption remain open. The shared shader catalog is in development and has no live public service yet.
+**Development preview.** There is no stable release yet. Major FPS drops, compilation stalls and high memory use remain unresolved. The latest v28 user playtest reported no rendering corruption; broader visual acceptance is still required. Full v28 shader preparation has not completed. The shared shader catalog is in development and has no live public service yet.
 
 [Website & HUD preview](https://christianfurr.github.io/Kokiri/) · [Build and try it](#try-kokiri) · [Report a problem](https://github.com/christianfurr/Kokiri/issues) · [Contribute](CONTRIBUTING.md) · [Catalog integration](docs/catalog/integration.md)
 
@@ -25,7 +25,7 @@ Actual native app window, captured 2026-11-15 with an existing compatible game b
 - **A configurable performance HUD.** Choose four corners, four sizes and three detail modes. Position, size and detail have been checked in gameplay and persist between launches.
 - **Local session statistics.** Inspect physical memory use, sampled area and optional frame timing. Recordings show their date and build, and observed game rates exclude generated frames.
 
-Kokiri also develops an **open shader and pipeline catalog** that compatible projects can integrate. Signed app updates use Sparkle; production signing, the public update feed and installation verification are still pending.
+Kokiri also develops an **open shader and pipeline catalog** that compatible projects can integrate. The launcher's signed-update plumbing uses Sparkle. Production signing, a public feed and end-to-end game-runtime update verification remain pending; updating the launcher alone does not update the game built from your own files.
 
 ## Try Kokiri
 
@@ -89,7 +89,8 @@ The builder verifies the supported input and rebuilds shader tooling from pinned
 | Native launcher | Compiles; Home and Performance screenshots show the implemented app |
 | Custom menu and HUD | Checked in a copied-profile gameplay session; physical L3 + R3 verification remains open |
 | Whole-game performance | Unverified; severe FPS drops, compilation stalls and memory growth remain open |
-| Death Mountain rendering | Corruption remains under investigation |
+| v28 visual correctness | No corruption reported in the latest user playtest; broader area and visual checks remain open |
+| v28 shader preparation | Incomplete; source metadata totals do not count compiled shaders or pipelines |
 | Public catalog and automatic updates | Local implementation exists; production delivery remains pending |
 
 New results need a matching build, hardware, resolution, tested route and cache state. We report actual game presentation rates separately from frame generation. We do not claim whole-game 60 FPS or a performance advantage over another project.

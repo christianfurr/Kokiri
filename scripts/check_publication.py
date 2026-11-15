@@ -19,11 +19,11 @@ REVIEWED_WEBSITE_IMAGES = {
     "website/assets/kokiri-home.png": "99a1a4937ec420ce0f4fdd069b3041928d2a5379d346a895c8f19aa554fdf5af",
     "website/assets/kokiri-mark.png": "fabe818a53f39cf79e7102264c2152cff977f4c9b0c5794a74f66013ef44eaa2",
 }
-APPROVED_IMAGES = {
-    "assets/brand/kokiri-mark.png",
-    "assets/readme/kokiri-home.png",
-    "assets/readme/kokiri-performance.png",
-    "assets/readme/kokiri-menu.png",
+# Root branding and screenshots have the same exact-byte provenance boundary.
+REVIEWED_APP_IMAGES = {
+    "assets/brand/kokiri-mark.png": "1a2ec2983946593100234937c508bac4cc4004b0f4b3cb2427668428b84eb23c",
+    "assets/readme/kokiri-home.png": "de45afc2807c7d6ce6866ce682ebbb4680f0e032521c1aedf572f1bc10cac3ad",
+    "assets/readme/kokiri-performance.png": "963762cdf250f83ae516ecdf062a8e892b52d034623798e05fb4a68cf7431b0a",
 }
 FORBIDDEN_PARTS = {
     "extracted", "rewritten", "prebuilt", "node_modules", "__pycache__",
@@ -57,8 +57,8 @@ def issue(name: str, data: bytes, mode: str = "100644") -> str | None:
         return None if hashlib.sha256(data).hexdigest() == PINNED_METADATA[name] else "public metadata pin changed; review provenance"
     if name in REVIEWED_WEBSITE_IMAGES:
         return None if hashlib.sha256(data).hexdigest() == REVIEWED_WEBSITE_IMAGES[name] else "website image changed; review provenance"
-    if name in APPROVED_IMAGES:
-        return None if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) <= 8 << 20 else "invalid approved image"
+    if name in REVIEWED_APP_IMAGES:
+        return None if hashlib.sha256(data).hexdigest() == REVIEWED_APP_IMAGES[name] else "app image changed; review provenance"
     if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".gz", ".tsv"}:
         return "unreviewed image, archive or metadata file"
     if data[:4] in MACHO or data.startswith((b"MZ", b"\x7fELF", b"PK\x03\x04")) or b"\0" in data:
@@ -96,14 +96,25 @@ def main() -> int:
     errors = []
     total = 0
     for name, (mode, blob) in sorted(entries.items()):
+        # Reject Git links before asking cat-file for a blob: a submodule is a
+        # commit object and may not even exist in this checkout's object store.
+        if mode not in {"100644", "100755"}:
+            errors.append((name, "symlink, submodule or unsupported Git mode"))
+            continue
         if args.staged:
+            if int(git("cat-file", "-s", blob)) > 32 << 20:
+                errors.append((name, "file exceeds source size bound"))
+                continue
             data = git("cat-file", "blob", blob)
         else:
             file = ROOT / name
-            if file.is_symlink():
-                errors.append((name, "symlink"))
+            if any(part.is_symlink() for part in (file, *file.parents) if part != ROOT and ROOT in part.parents):
+                errors.append((name, "symlink in file path"))
                 continue
             if not file.exists():
+                continue
+            if not file.is_file():
+                errors.append((name, "non-regular file"))
                 continue
             if file.stat().st_size > 32 << 20:
                 errors.append((name, "file exceeds source size bound"))

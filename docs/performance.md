@@ -2,7 +2,11 @@
 
 ## Current boundary
 
-Kokiri's public v28 shader chain needs fresh gameplay validation. The figures below describe an earlier private v23 runtime experiment on an Apple M4 with 16 GiB unified memory, AC power, a 1280×720 internal picture and 1920×1080 output. They do not compare Kokiri against a competitor or prove a new performance improvement.
+The latest v28 user playtest reported no rendering corruption. Preserve that improvement while completing broader visual checks. Severe FPS drops, compilation hitches and high memory use remain unresolved; no whole-game performance acceptance follows from that visual report.
+
+Full v28 preparation has never completed. The earlier build labeled ready used `OOT_SHADERS=none` and warmed only 1,861 shader libraries and 1,920 pipelines. The source list's 50,376 metadata rows are not a compiled-shader count. Shader libraries, prepared pipelines and source metadata are separate measurements. Old v23 caches cannot be relabeled as compatible v28 caches.
+
+The figures below describe an earlier private v23 runtime experiment on an Apple M4 with 16 GiB unified memory, AC power, a 1280×720 internal picture and 1920×1080 output. They do not measure the current Kokiri v28 build, compare Kokiri against a competitor or prove a new performance improvement.
 
 ## Five-cycle diagnostic baseline, 2026-11-15
 
@@ -18,7 +22,7 @@ The same copied profile revisited two reported Death Mountain positions and Goro
 
 The presentation analyzer accepted all 15 windows after matching actual presentation times and frame identity, excluding generated frames. The first six windows contained five gaps above 100 ms; the final nine contained none. Full-cycle peaks include transitions and settling, which the location windows omit. The peak grew 485.95 MiB from cycle 1 to 5 even though late settled exits stayed near the same value. Memory growth is still open.
 
-This is one repeated warm route, without a matched default-budget control soak. Fresh areas can compile new pipelines and hitch for seconds. The route does not establish a whole-game 60 FPS result. Death Mountain's rectangular corruption remained visible in later controlled tests, including a broad occlusion-result override.
+This is one repeated warm route, without a matched default-budget control soak. Fresh areas can compile new pipelines and hitch for seconds. The route does not establish a whole-game 60 FPS result. Death Mountain's rectangular corruption remained visible in later v23 controlled tests, including a broad occlusion-result override. This historical observation does not contradict the later v28 user's no-corruption report.
 
 ## Method for new results
 

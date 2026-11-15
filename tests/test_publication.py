@@ -54,6 +54,48 @@ class PublicationTests(unittest.TestCase):
         self.git('add', 'external-link')
         self.assertNotEqual(self.scan('--staged').returncode, 0)
 
+    def test_parent_symlink_cannot_read_external_working_file(self):
+        directory = self.root / 'public'
+        directory.mkdir()
+        (directory / 'source.txt').write_text('tracked source')
+        self.git('add', 'public/source.txt')
+        shutil.rmtree(directory)
+        with tempfile.TemporaryDirectory() as external:
+            (Path(external) / 'source.txt').write_text('external private bytes')
+            directory.symlink_to(external, target_is_directory=True)
+            result = self.scan()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('symlink in file path', result.stdout)
+        self.assertNotIn('external private bytes', result.stdout)
+
+    def test_submodule_is_rejected_without_reading_commit_as_blob(self):
+        self.git('update-index', '--add', '--cacheinfo',
+                 '160000,1111111111111111111111111111111111111111,dependency')
+        result = self.scan('--staged')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unsupported Git mode', result.stdout)
+        self.assertNotIn('fatal:', result.stderr)
+
+    def test_reviewed_app_image_rejects_replacement_bytes(self):
+        relative = Path('assets/readme/kokiri-home.png')
+        image = self.root / relative
+        image.parent.mkdir(parents=True)
+        shutil.copyfile(Path(__file__).resolve().parents[1] / relative, image)
+        self.git('add', str(relative))
+        self.assertEqual(self.scan('--staged').returncode, 0)
+        image.write_bytes(image.read_bytes() + b'private appended payload')
+        self.git('add', str(relative))
+        result = self.scan('--staged')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('app image changed; review provenance', result.stdout)
+        self.assertNotIn('private appended payload', result.stdout)
+
+    def test_unused_image_name_has_no_provenance_exemption(self):
+        image = self.root / 'assets/readme/kokiri-menu.png'
+        image.parent.mkdir(parents=True)
+        image.write_bytes(b'\x89PNG\r\n\x1a\nprivate payload')
+        self.assertNotEqual(self.scan().returncode, 0)
+
     def test_reviewed_website_image_rejects_replacement_bytes(self):
         relative = Path('website/assets/kokiri-mark.png')
         image = self.root / relative

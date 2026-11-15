@@ -16,7 +16,7 @@ Use case: stylized-concept. Asset type: wide atmospheric backdrop for the Kokiri
 
 ## Published image hashes
 
-The publication guard pins these reviewed bytes; replacing an image requires review and a matching pin update.
+The publication guard pins these reviewed bytes; replacing an image requires review and a matching pin update. It also pins the original brand mark and the root Home/Performance screenshots, rather than accepting an arbitrary PNG under an approved filename. Root screenshot identities are recorded in `assets/readme/PROVENANCE.md`. These hash checks bind publication to the already reviewed files; they do not turn historical captures into current gameplay evidence.
 
 | Image | SHA-256 |
 | --- | --- |
