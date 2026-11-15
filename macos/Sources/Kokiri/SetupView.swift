@@ -49,7 +49,7 @@ struct SetupView: View {
                             Button(model.building ? "Building…" : "Build Game") {
                                 if let game, let fonts, let work, let output { model.startBuild(game: game, fonts: fonts, work: work, output: output) }
                             }.buttonStyle(.borderedProminent)
-                                .disabled(model.building || model.anyGameRunning || game == nil || fonts == nil || work == nil || output == nil || model.preferences.repository == nil)
+                                .disabled(model.busy || model.building || model.anyGameRunning || game == nil || fonts == nil || work == nil || output == nil || model.preferences.repository == nil)
                         }
                         if model.building || !model.buildOutput.isEmpty {
                             Text(model.buildStage).font(.system(size: 12, weight: .medium)).textSelection(.enabled)

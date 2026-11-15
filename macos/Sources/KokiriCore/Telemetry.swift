@@ -83,8 +83,10 @@ public final class LineTail {
     private var inode: UInt64 = 0
     private var offset: UInt64 = 0
     private var partial = Data()
+    private(set) var madeProgress = false
     public init(_ url: URL) { self.url = url }
     public func read() -> [String] {
+        madeProgress = false
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = attributes[.size] as? NSNumber, let file = attributes[.systemFileNumber] as? NSNumber,
               attributes[.type] as? FileAttributeType == .typeRegular,
@@ -94,6 +96,7 @@ public final class LineTail {
         do {
             try handle.seek(toOffset: offset)
             guard let bytes = try handle.read(upToCount: 256 << 10), !bytes.isEmpty else { return [] }
+            madeProgress = true
             offset += UInt64(bytes.count); partial.append(bytes)
             var lines: [String] = []
             while let newline = partial.firstIndex(of: 10) {
@@ -131,7 +134,7 @@ public struct RecordedSession: Sendable {
             let tail = LineTail(url)
             for _ in 0..<2048 {
                 let lines = tail.read()
-                if lines.isEmpty { break }
+                if lines.isEmpty && !tail.madeProgress { break }
                 for line in lines { consume(&snapshot, line) }
             }
         }

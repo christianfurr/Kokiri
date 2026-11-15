@@ -28,6 +28,19 @@ final class CoreTests: XCTestCase {
         XCTAssertThrowsError(try ProfileImport.copy(from: source, to: root.appendingPathComponent("target")))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("target").path))
     }
+    func testProfileDestinationAliasCannotNestImportInsideSource() throws {
+        let fm = FileManager.default, root = try temporary()
+        let source = root.appendingPathComponent("source"), alias = root.appendingPathComponent("alias")
+        try fm.createDirectory(at: source, withIntermediateDirectories: true)
+        let save = source.appendingPathComponent("slot.bin"), bytes = Data([1, 2, 3, 4])
+        try bytes.write(to: save)
+        try fm.createSymbolicLink(at: alias, withDestinationURL: source)
+        let destination = alias.appendingPathComponent("missing-parent/profile")
+
+        XCTAssertThrowsError(try ProfileImport.copy(from: source, to: destination))
+        XCTAssertEqual(try Data(contentsOf: save), bytes)
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: source.path), ["slot.bin"])
+    }
     func testGeneratedAndDuplicatePresentsDoNotInflateObservedRate() {
         var snapshot = PerformanceSnapshot()
         snapshot.consumePresented("presented\t1\t0\t0\t0\t100.0\t0\t0")

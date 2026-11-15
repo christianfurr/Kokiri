@@ -120,12 +120,14 @@ enum Destination: String, CaseIterable, Identifiable {
     }
     func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
     func importProfile() {
+        guard !busy, !building else { return }
         guard !anyGameRunning else { message = "Close Ocarina of Time before importing a save profile."; return }
         guard let source = chooseFolder(title: "Import a complete player profile", prompt: "Copy Profile", suggested: KokiriPaths.legacyProfile) else { return }
         let alert = NSAlert(); alert.messageText = "Copy this profile into Kokiri?"
         alert.informativeText = "The complete folder will be verified and copied. The original stays in place. An existing Kokiri profile is never replaced."
         alert.addButton(withTitle: "Copy Profile"); alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard !anyGameRunning else { message = "Close Ocarina of Time before importing a save profile."; return }
         busy = true
         Task {
             defer { busy = false }
@@ -138,6 +140,7 @@ enum Destination: String, CaseIterable, Identifiable {
 
     func play() {
         if let runtime, !runtime.isTerminated { runtime.activate(options: [.activateAllWindows]); return }
+        guard !busy, !building else { return }
         guard !anyGameRunning else { message = "Another game session is running. Finish it before starting Kokiri’s profile."; return }
         guard let selected = installation else { selection = .setup; return }
         busy = true
@@ -180,6 +183,11 @@ enum Destination: String, CaseIterable, Identifiable {
                         try Data((contextHash + "\n").utf8).write(to: folder.appendingPathComponent("catalog-context.sha256"), options: .atomic)
                         catalogCheckpoint = checkpoint; catalogContext = context
                     } catch { catalog.deferSharing(error.localizedDescription) }
+                }
+                // Catalog preparation can suspend. Recheck before opening an app that
+                // NSWorkspace could otherwise reuse with another player's environment.
+                guard !anyGameRunning else {
+                    throw KokiriError.message("Another game session opened during preparation. Finish it before starting Kokiri’s profile.")
                 }
                 let launched = try await NSWorkspace.shared.openApplication(at: verified.app, configuration: configuration)
                 guard let sample = ProcessSample.read(pid: launched.processIdentifier),
@@ -302,7 +310,8 @@ enum Destination: String, CaseIterable, Identifiable {
     }
 
     func startBuild(game: URL, fonts: URL, work: URL, output: URL) {
-        guard !building, !anyGameRunning else { message = "Close the game before building."; return }
+        guard !busy, !building else { return }
+        guard !anyGameRunning else { message = "Close the game before building."; return }
         guard let repository = preferences.repository else { message = "Choose the Kokiri source folder first."; return }
         guard !work.standardizedFileURL.path.hasPrefix(repository.standardizedFileURL.path + "/"),
               work.standardizedFileURL != repository.standardizedFileURL,

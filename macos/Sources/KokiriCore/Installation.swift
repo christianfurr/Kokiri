@@ -75,6 +75,24 @@ public struct LauncherPreferences: Codable, Sendable {
 }
 
 public enum ProfileImport {
+    private static func canonicalLocation(_ url: URL) throws -> URL {
+        // Resolve existing ancestors even when the destination does not exist yet.
+        var ancestor = url
+        var missing: [String] = []
+        while !FileManager.default.fileExists(atPath: ancestor.path) {
+            missing.append(ancestor.lastPathComponent)
+            let parent = ancestor.deletingLastPathComponent()
+            guard parent != ancestor else { throw KokiriError.message("The profile path cannot be resolved.") }
+            ancestor = parent
+        }
+        let path = try ancestor.withUnsafeFileSystemRepresentation { path -> String in
+            guard let path, let resolved = realpath(path, nil) else { throw KokiriError.message("The profile path cannot be resolved.") }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+        return missing.reversed().reduce(URL(fileURLWithPath: path)) { $0.appendingPathComponent($1) }
+    }
+
     private static func fingerprint(_ root: URL) throws -> [String: String] {
         let fm = FileManager.default
         let keys: Set<URLResourceKey> = [.isSymbolicLinkKey, .isRegularFileKey, .isDirectoryKey]
@@ -111,8 +129,9 @@ public enum ProfileImport {
     public static func copy(from source: URL, to destination: URL) throws -> Int {
         let fm = FileManager.default, source = source.standardizedFileURL, destination = destination.standardizedFileURL
         guard !fm.fileExists(atPath: destination.path) else { throw KokiriError.message("Kokiri already has a profile. It was left untouched.") }
-        guard source != destination, !destination.path.hasPrefix(source.path + "/"),
-              !source.path.hasPrefix(destination.path + "/") else { throw KokiriError.message("Choose a separate source profile.") }
+        let sourcePath = try canonicalLocation(source).path, destinationPath = try canonicalLocation(destination).path
+        guard sourcePath != destinationPath, !destinationPath.hasPrefix(sourcePath + "/"),
+              !sourcePath.hasPrefix(destinationPath + "/") else { throw KokiriError.message("Choose a separate source profile.") }
         let before = try fingerprint(source)
         try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         let staging = destination.deletingLastPathComponent().appendingPathComponent(".profile-import-" + UUID().uuidString)
