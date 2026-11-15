@@ -112,6 +112,122 @@ class SeedTests(unittest.TestCase):
                                       started_at=time.time(), jobs=1)
             self.assertEqual((out/'prior-seed').read_bytes(), b'prior')
 
+    def test_publication_rejects_cache_output_and_generated_path_overlaps_before_mutation(self):
+        for overlap in ('equal', 'ancestor', 'descendant', 'parent-symlink', 'stage-symlink', 'old-symlink'):
+            with self.subTest(overlap=overlap), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                cache, key, verified, extra, metadata = self.publication_fixture(root)
+                prior = root/'published'
+                prior.mkdir()
+                (prior/'prior-seed').write_bytes(b'prior')
+                out = prior
+                if overlap == 'equal': out = cache
+                elif overlap == 'ancestor': out = root
+                elif overlap == 'descendant': out = cache/'new-seed'
+                elif overlap == 'parent-symlink':
+                    alias = root/'alias'; alias.symlink_to(cache, target_is_directory=True); out = alias/'new-seed'
+                elif overlap == 'stage-symlink':
+                    prior.with_name('published.partial').symlink_to(cache, target_is_directory=True)
+                else:
+                    (root/f'.published.old-{os.getpid()}-123').symlink_to(cache, target_is_directory=True)
+                before = {path.name:path.read_bytes() for path in cache.iterdir() if path.is_file()}
+                with mock.patch.object(seed.time, 'time_ns', return_value=123), \
+                     mock.patch.object(seed.shutil, 'rmtree') as remove, \
+                     mock.patch.object(Path, 'rename') as rename, \
+                     mock.patch.object(Path, 'mkdir') as mkdir:
+                    with self.assertRaisesRegex(ValueError, 'protected'):
+                        seed.publish_seed(out, cache, {verified}, {key: {'stage': 4}}, metadata,
+                                          started_at=time.time(), jobs=1)
+                    remove.assert_not_called(); rename.assert_not_called(); mkdir.assert_not_called()
+                self.assertEqual({path.name:path.read_bytes() for path in cache.iterdir() if path.is_file()}, before)
+                self.assertTrue((cache/(extra+'_b.metal')).exists())
+                self.assertEqual((prior/'prior-seed').read_bytes(), b'prior')
+
+    def test_publication_protects_selected_input_and_evidence_sentinels(self):
+        for protected_kind in ('output-child', 'stage', 'backup-record', 'symlink-parent'):
+            with self.subTest(protected_kind=protected_kind), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                cache, key, verified, _, metadata = self.publication_fixture(root)
+                out = root/'published'
+                out.mkdir()
+                (out/'prior-seed').write_bytes(b'prior')
+                if protected_kind == 'output-child':
+                    proof = out/'ledger.jsonl'
+                elif protected_kind == 'stage':
+                    stage = root/'published.partial'; stage.mkdir(); proof = stage/'corpus.bin'
+                elif protected_kind == 'backup-record':
+                    proof = root/f'.published.old-{os.getpid()}-123.verified.json'
+                else:
+                    evidence = root/'evidence'; evidence.mkdir(); proof = evidence/'proof.json'
+                    alias = root/'alias'; alias.symlink_to(evidence, target_is_directory=True)
+                    out = alias/'not-created-yet'
+                proof.write_bytes(b'protected source/evidence bytes')
+                with mock.patch.object(seed.time, 'time_ns', return_value=123), \
+                     mock.patch.object(seed.shutil, 'rmtree') as remove, \
+                     mock.patch.object(Path, 'rename') as rename, \
+                     mock.patch.object(Path, 'mkdir') as mkdir:
+                    protected = proof.parent if protected_kind == 'symlink-parent' else proof
+                    with self.assertRaisesRegex(ValueError, 'protected'):
+                        seed.publish_seed(out, cache, {verified}, {key: {'stage': 4}}, metadata,
+                                          started_at=time.time(), protected_paths=(protected,), jobs=1)
+                    remove.assert_not_called(); rename.assert_not_called(); mkdir.assert_not_called()
+                self.assertEqual(proof.read_bytes(), b'protected source/evidence bytes')
+                self.assertEqual((root/'published/prior-seed').read_bytes(), b'prior')
+
+    def test_case_alias_of_existing_cache_ancestor_is_protected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cache, _, _, _, _ = self.publication_fixture(root)
+            alias = root/'CACHE'
+            if not alias.exists() or not os.path.samefile(alias, cache):
+                self.skipTest('filesystem is case sensitive')
+            with self.assertRaisesRegex(ValueError, 'protected'):
+                seed.guard_publication_paths(alias/'new-seed', cache, root/'safe-stage', root/'safe-old')
+
+    def test_verification_record_failure_preserves_prior_seed_and_record(self):
+        for failure in ('write', 'rename'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                cache, key, verified, extra, metadata = self.publication_fixture(root)
+                out = root/'published'; out.mkdir(); (out/'prior-seed').write_bytes(b'prior')
+                prior_record = root/'published.verified.json'; prior_record.write_bytes(b'prior verification record')
+                rename = Path.rename
+                def fail_record(path, target):
+                    if path == root/'published.partial.verified.json':
+                        raise OSError('synthetic record install failure')
+                    return rename(path, target)
+                patch = (mock.patch.object(seed, 'record_verified', side_effect=OSError('synthetic record write failure'))
+                         if failure == 'write' else mock.patch.object(Path, 'rename', fail_record))
+                with patch, mock.patch.object(seed.subprocess, 'Popen') as cleanup:
+                    with self.assertRaisesRegex(OSError, 'synthetic record'):
+                        seed.publish_seed(out, cache, {verified}, {key: {'stage': 4}}, metadata,
+                                          started_at=time.time(), jobs=1)
+                    cleanup.assert_not_called()
+                self.assertEqual((out/'prior-seed').read_bytes(), b'prior')
+                self.assertEqual(prior_record.read_bytes(), b'prior verification record')
+                self.assertTrue((cache/(extra+'_b.metal')).exists())
+
+    def test_cached_publication_updates_runtime_proof_without_retranslating_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cache, key, verified, _, metadata = self.publication_fixture(root)
+            entries = json.loads((cache/(key+'.variants')).read_text())
+            (cache/(key+'.variants')).write_text(json.dumps(entries[:1]))
+            out = root/'published'
+            first = seed.publish_seed(out, cache, {verified}, {key: {'stage': 4}}, metadata,
+                                      started_at=time.time(), jobs=1)
+            inode = (cache/(verified+'_b.metal')).stat().st_ino
+            self.assertIsNone(seed.publish_seed(out, cache, {verified}, {key: {'stage': 4}}, metadata,
+                                               started_at=time.time(), jobs=1))
+            changed = dict(metadata, runtime_sha256='9'*64)
+            with mock.patch.object(seed.subprocess, 'Popen'):
+                updated = seed.publish_seed(out, cache, {verified}, {key: {'stage': 4}}, changed,
+                                            started_at=time.time(), jobs=1)
+            self.assertEqual(updated['runtime_sha256'], '9'*64)
+            self.assertEqual(updated['inputs'], first['inputs'])
+            self.assertEqual((out/(verified+'_b.metal')).stat().st_ino, inode)
+            self.assertEqual(json.loads((out/'seed-manifest.json').read_text())['runtime_sha256'], '9'*64)
+
     def corpus(self, path, count=4):
         records = []
         for number in range(count):

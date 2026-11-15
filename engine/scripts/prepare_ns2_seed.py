@@ -105,7 +105,7 @@ def publish_digests(paths, seed, hash_all):
 GENERATED = {'shader-keys.json', 'pso_title.tsv', 'pso_manifest.tsv'}   # written by the publish itself, from the inputs
 
 
-def seed_unchanged(out, files, inputs):
+def seed_unchanged(out, files, inputs, runtime_sha256=None):
     """Whether the published seed already is this one: made from the same inputs (translator, chain, depth mode, game
     files, shader list, corpus and the scripts that write it), and every translation and index file is the very file it has
     (same device and inode: a translation made again, or an index this run writes, is another file). Then it is kept as it
@@ -113,6 +113,8 @@ def seed_unchanged(out, files, inputs):
     更新": publishing an unchanged seed took 3 minutes, and its new manifest had the bundle signed again, 3 more)."""
     try:
         old = json.loads((out / 'seed-manifest.json').read_text())
+        if runtime_sha256 is not None and old.get('runtime_sha256') != runtime_sha256:
+            return False
         if old.get('inputs') != inputs:
             return False
         names = set(old.get('files', {}))
@@ -376,8 +378,38 @@ def verified_batch_outputs(cache, verified, keys, jobs=2):
     return outputs, indexes
 
 
+def guard_publication_paths(out, cache, staging, old, protected_paths=(), additional_paths=()):
+    """No publication namespace may consume cached, source or evidence paths."""
+    def overlaps(first, second):
+        if first == second or first in second.parents or second in first.parents:
+            return True
+        # resolve() can preserve spelling aliases on case-insensitive APFS.
+        # Compare each existing root to the other's existing ancestor inodes;
+        # shared parents alone do not make ordinary sibling outputs overlap.
+        for root, nested in ((first, second), (second, first)):
+            try:
+                root_stat = root.stat()
+            except FileNotFoundError:
+                continue
+            for ancestor in (nested, *nested.parents):
+                try:
+                    if os.path.samestat(root_stat, ancestor.stat()):
+                        return True
+                except FileNotFoundError:
+                    pass
+        return False
+    candidates = [Path(path).resolve() for path in (out, staging, old, *additional_paths)]
+    protected = [Path(cache).resolve(), *(Path(path).resolve() for path in protected_paths if path is not None)]
+    for candidate in candidates:
+        if any(overlaps(candidate, source) for source in protected):
+            raise ValueError('seed publication path overlaps a protected cache, source or evidence path: '+str(candidate))
+    for index, candidate in enumerate(candidates):
+        if any(overlaps(candidate, other) for other in candidates[index+1:]):
+            raise ValueError('seed publication output, staging and old namespaces overlap')
+
+
 def publish_seed(out, cache, verified, inventory, metadata, *, started_at, shader_list=None,
-                 scope_keys=None, logs=None, jobs=2):
+                 scope_keys=None, logs=None, jobs=2, protected_paths=()):
     """Publish already request-verified outputs with the existing seed format.
 
     The caller supplies context/completion metadata after native verification.
@@ -387,6 +419,15 @@ def publish_seed(out, cache, verified, inventory, metadata, *, started_at, shade
     or None when the prior published seed is already unchanged.
     """
     out, cache = Path(out), Path(cache)
+    staging = out.with_name(out.name+'.partial')
+    old = out.with_name(f'.{out.name}.old-{os.getpid()}-{time.time_ns()}')
+    verified_record = out.with_name(out.name+'.verified.json')
+    staged_record = staging.with_name(staging.name+'.verified.json')
+    staged_record_tmp = staged_record.with_name(staged_record.name+'.tmp')
+    old_record = old.with_name(old.name+'.verified.json')
+    record_paths = (verified_record, staged_record, staged_record_tmp, old_record)
+    protected_paths = (*protected_paths, shader_list)
+    guard_publication_paths(out, cache, staging, old, protected_paths, record_paths)
     report = dict(metadata)
     inputs = report['inputs']
     context_fields = ('chain', 'version', 'source_romfs_sha256', 'translation_context_sha256',
@@ -409,11 +450,11 @@ def publish_seed(out, cache, verified, inventory, metadata, *, started_at, shade
         raise ValueError('verified full seed has missing cached shader keys')
     if set(keys) != set(inventory) or {name[:-len('_b.metal')] for name in files if name.endswith('_b.metal')} != set(verified):
         raise ValueError('verified seed variants are missing cached outputs or differ from the corpus')
-    if not indexes and seed_unchanged(out, files, inputs):
+    if not indexes and seed_unchanged(out, files, inputs, report.get('runtime_sha256')):
         print(f'seed unchanged: its {len(files)} translation files are the ones published, from the same inputs; '
               'kept as it is (no new links, digests or manifest)', flush=True)
         return None
-    staging = out.with_name(out.name+'.partial')
+    guard_publication_paths(out, cache, staging, old, protected_paths, record_paths)
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True)
     for name, source in files.items():
@@ -438,18 +479,40 @@ def publish_seed(out, cache, verified, inventory, metadata, *, started_at, shade
     report['files'], read = publish_digests(sorted(staging.iterdir()), out, lambda paths: parallel_sha256(paths, jobs))
     print(f'seed files: {len(report["files"])}, {read} read again (the rest kept the digest of the last seed)', flush=True)
     (staging/'seed-manifest.json').write_text(json.dumps(report, indent=2)+'\n')
-    old = out.with_name(f'.{out.name}.old-{os.getpid()}-{time.time_ns()}')
-    if out.exists():
-        out.rename(old)
+    # This record identifies files by inode/content, not the staging folder's
+    # absolute name. Directory rename preserves those file identities.
+    record_verified(staging, report['files'])
+    guard_publication_paths(out, cache, staging, old, protected_paths, record_paths)
+    old_moved = old_record_moved = seed_installed = record_installed = False
     try:
+        if out.exists():
+            out.rename(old)
+            old_moved = True
+        if verified_record.exists():
+            verified_record.rename(old_record)
+            old_record_moved = True
         staging.rename(out)
-    except OSError:
-        if old.exists():
+        seed_installed = True
+        staged_record.rename(verified_record)
+        record_installed = True
+    except BaseException:
+        # Prior seed and its verification record are one publication. A failed
+        # final record install must restore both before any old-data cleanup.
+        if record_installed:
+            verified_record.rename(staged_record)
+        if seed_installed:
+            out.rename(staging)
+        if old_moved:
             old.rename(out)
+        if old_record_moved:
+            old_record.rename(verified_record)
         raise
-    if old.exists():
-        subprocess.Popen(['/bin/rm', '-rf', str(old)], start_new_session=True)
-    record_verified(out, report['files'])
+    if old.exists() or old_record.exists():
+        guard_publication_paths(out, cache, staging, old, protected_paths, record_paths)
+        try:
+            subprocess.Popen(['/bin/rm', '-rf', str(old), str(old_record)], start_new_session=True)
+        except OSError as error:
+            print(f'published seed; prior generated backup retained because cleanup could not start: {error}', flush=True)
     print(json.dumps({key: report[key] for key in ('version', 'shaders', 'corpus_shaders', 'translated_default',
                                                   'listed_variants', 'listed_asked', 'seconds')}))
     return report
@@ -626,7 +689,8 @@ def main():
                   inputs=inputs, files={})
     publish_seed(out, cache, verified, inventory, report, started_at=t0, shader_list=a.list,
                  scope_keys=sorted(corpus_inventory(full_corpus)) if only else None,
-                 logs=a.logs, jobs=a.jobs)
+                 logs=a.logs, jobs=a.jobs,
+                 protected_paths=(corpus, full_corpus, a.binary, prebuilt, service, batch_dir))
 
 
 if __name__ == '__main__':
