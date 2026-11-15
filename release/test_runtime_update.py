@@ -321,6 +321,45 @@ class RuntimeUpdateTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         runtime.inspect_app(app, self.record)
 
+    def test_candidate_rejects_extra_or_duplicate_driver_flags_with_valid_context_digest(self):
+        app, original, original_info = self.app()
+        original_manifest = self.library_manifest(app)
+        for extra in ('-fno-wrapv', '-fno-preserve-invariance', '-ffast-math',
+                      '-funsafe-math-optimizations', '-fmetal-math-mode=fast', '-fwrapv', '-g'):
+            with self.subTest(extra_driver_flag=extra):
+                receipt, info, manifest = deepcopy(original), deepcopy(original_info), deepcopy(original_manifest)
+                observation = receipt['compiler_observation']
+                observation['effective_flags'].append(extra)
+                context = self.compiler_key(observation)
+                self.assertNotEqual(context, original['compiler_context_sha256'])
+                receipt['compiler_context_sha256'] = context
+                manifest['compiler_observation'] = deepcopy(observation)
+                manifest['compiler_context_sha256'] = context
+                self.write_library_manifest(app, receipt, info, manifest)
+                with patch.object(runtime.subprocess, 'run'):
+                    with self.assertRaisesRegex(ValueError, 'correctness flags'):
+                        runtime.inspect_app(app, self.record)
+
+    def test_candidate_rejects_frontend_policy_overrides_with_exact_driver_flags(self):
+        app, original, original_info = self.app()
+        original_manifest = self.library_manifest(app)
+        for override in ('-fno-wrapv', '-fno-preserve-invariance', '-ffast-math',
+                         '-funsafe-math-optimizations', '-fmetal-math-mode=fast'):
+            with self.subTest(frontend_override=override):
+                receipt, info, manifest = deepcopy(original), deepcopy(original_info), deepcopy(original_manifest)
+                observation = receipt['compiler_observation']
+                observation['effective_invocations'][0].append(override)
+                self.assertEqual(observation['effective_flags'], original['compiler_observation']['effective_flags'])
+                context = self.compiler_key(observation)
+                self.assertNotEqual(context, original['compiler_context_sha256'])
+                receipt['compiler_context_sha256'] = context
+                manifest['compiler_observation'] = deepcopy(observation)
+                manifest['compiler_context_sha256'] = context
+                self.write_library_manifest(app, receipt, info, manifest)
+                with patch.object(runtime.subprocess, 'run'):
+                    with self.assertRaisesRegex(ValueError, 'overrides the required correctness policy'):
+                        runtime.inspect_app(app, self.record)
+
     def test_candidate_rejects_forged_context_digest_with_matching_observations(self):
         app, receipt, info = self.app()
         manifest = self.library_manifest(app)
