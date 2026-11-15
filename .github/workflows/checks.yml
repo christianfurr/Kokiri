@@ -23,7 +23,9 @@ jobs:
         run: |
           python -I -m unittest discover -s engine/tests -p test_preparation_receipt.py -v
           python -I -m unittest discover -s engine/tests -p test_shader_seed.py -v
+          python -I -m unittest discover -s engine/tests -p test_shader_seed_resume.py -v
           python -I -m unittest discover -s engine/tests -p test_compute_pipelines.py -v
+          python -I -m unittest discover -s engine/tests -p test_pipeline_preparation_inputs.py -v
       - name: Check actual presentation certification
         run: python -I -m unittest discover -s engine/tests -p test_analyze_presented.py -v
       - name: Parse public Python source
@@ -70,6 +72,18 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Check locked observation and disposable-development MCP
+        working-directory: tools/kokiri-mcp
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/kokiri-mcp-venv
+        run: |
+          python3 -m pip install --only-binary=:all: uv==0.8.3
+          uv sync --locked --python python3
+          uv run --locked python -B -m unittest discover -s tests -v -f
       - name: Check signed runtime update and diagnostic ownership
         env:
           KOKIRI_RELEASE_VENV: ${{ runner.temp }}/kokiri-release-venv
@@ -81,6 +95,11 @@ jobs:
       - run: bash macos/test.sh
       - run: bash macos/build.sh
       - run: python3 -I -m unittest discover -s engine/tests -p test_oot_live_bridge.py -v
+      - name: Check native development ownership and human takeover
+        run: |
+          python3 -I -m unittest discover -s engine/tests -p test_development_launcher.py -v
+          python3 -I -m unittest discover -s engine/tests -p test_development_input.py -v
+          python3 -I -m unittest discover -s engine/tests -p test_game_slot_takeover.py -v
       - run: python3 -I -m unittest discover -s engine/tests -p test_startup_view.py -v
       - run: python3 -I -m unittest discover -s engine/tests -p test_catalog_runtime.py -v
       - name: Check shader compiler identity and packaging gates
