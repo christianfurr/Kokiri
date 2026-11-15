@@ -29,13 +29,15 @@ static void queues_valid(const cv_dec *d) {
     for (unsigned k = 0; k < d->fcount; k++) CHECK(!owned[d->fifo[(d->fhead + k) % 8]]++);
     for (unsigned k = 0; k < d->pcount; k++) {
         unsigned i = d->pend[(d->phead + k) % CV_BUFS];
-        CHECK(!pending[i]++ && !d->buf[i].filled && owned[i]);
+        /* Acquire may hand out a pending buffer before its sync is ready. */
+        CHECK(!pending[i]++ && !d->buf[i].filled && d->buf[i].reg);
     }
 }
 
-static void fixture(cv_dec *d, cv_pool *pool, unsigned count) {
-    *d = (cv_dec){.magic = CV_MAGIC, .id = 1, .codec = CV_AV1};
+static void fixture(cv_dec *d, cv_pool *pool, unsigned count, int codec) {
+    *d = (cv_dec){.magic = CV_MAGIC, .id = 1, .codec = codec};
     pthread_mutex_init(&d->mu, NULL);
+    CHECK(!g_cv[d->id - 1]); g_cv[d->id - 1] = d;
     *pool = (cv_pool){.magic = CV_MAGIC, .count = count, .w = 2, .h = 2};
     pool->img = calloc(count, sizeof *pool->img);
     for (unsigned i = 0; i < count; i++) {
@@ -46,11 +48,13 @@ static void fixture(cv_dec *d, cv_pool *pool, unsigned count) {
 }
 
 static void cleanup(cv_dec *d, cv_pool *pool) {
+    CHECK(g_cv[d->id - 1] == d); g_cv[d->id - 1] = NULL;
     for (unsigned i = 0; i < pool->count; i++) if (pool->img[i]) vpx_img_free(pool->img[i]);
     for (int i = 0; i < d->nheld; i++) vpx_img_free(d->held[i]);
     if (d->last_skipped) vpx_img_free(d->last_skipped);
     free(pool->img);
     if (d->av1) mav1_free(d->av1);
+    else if (d->vpx_ok) CHECK(vpx_codec_destroy(&d->vpx) == VPX_CODEC_OK);
     pthread_mutex_destroy(&d->mu);
 }
 
@@ -58,6 +62,7 @@ static int64_t consume(cv_dec *d, int *eos) {
     cv_dec *handle = d;
     uint32_t i; cv_sync sync;
     CHECK(cv_dec_acq(&i, &sync, &handle) == 0);
+    CHECK(gs_try_wait(&sync));
     uint16_t w, h, cw, ch; int64_t ts; bool end;
     CHECK(cv_dec_props(&w, &h, &cw, &ch, &ts, &end, &handle, i) == 0);
     CHECK(sync.gen == d->buf[i].gen && sync.idx == i);
@@ -67,8 +72,130 @@ static int64_t consume(cv_dec *d, int *eos) {
     return ts;
 }
 
+static Result properties(cv_dec *d, uint32_t index, int64_t *pts, bool *eos) {
+    uint16_t w, h, cw, ch; cv_dec *handle = d;
+    return cv_dec_props(&w, &h, &cw, &ch, pts, eos, &handle, index);
+}
+
+static void publish(cv_dec *d, int64_t pts, uint8_t value) {
+    vpx_image_t *im = vpx_img_alloc(NULL, VPX_IMG_FMT_I420, 2, 2, 1);
+    CHECK(im != NULL); memset(im->planes[0], value, 4);
+    im->planes[1][0] = im->planes[2][0] = 128;
+    CHECK(cv_hold(d, im, pts)); drain(d);
+}
+
+static void submit_eof(cv_dec *d) {
+    cv_dec *handle = d; uint64_t submitted;
+    CHECK(!cv_dec_submit(&submitted, &handle, NULL, 0, 0, true));
+}
+
+static void reset_ready(unsigned buffers, unsigned pictures, int codec) {
+    cv_dec d; cv_pool pool; fixture(&d, &pool, buffers, codec);
+    cv_dec *handle = &d; virtual_ns = 0;
+    for (unsigned i = 0; i < pictures; i++) publish(&d, i * 16666667ll, (uint8_t)(16 + i));
+    submit_eof(&d);
+    unsigned filled[CV_BUFS], generation[CV_BUFS]; vpx_image_t *images[CV_BUFS];
+    for (unsigned i = 0; i < buffers; i++) {
+        filled[i] = d.buf[i].filled; generation[i] = d.buf[i].gen; images[i] = pool.img[i];
+    }
+    CHECK(!cv_dec_reset(&handle));
+    CHECK(!d.clock.started && !d.nheld && !d.last_skipped && !d.eos_pending);
+    CHECK(d.fcount == buffers && d.pcount == buffers);
+    for (unsigned i = 0; i < buffers; i++) {
+        CHECK(!d.buf[i].filled && !d.buf[i].eos && !d.buf[i].ts);
+        CHECK(d.buf[i].gen == generation[i] + filled[i]);
+        CHECK(pool.img[i] == images[i]);
+        CHECK(d.pend[(d.phead + i) % CV_BUFS] == i);
+    }
+    queues_valid(&d);
+    uint32_t first; cv_sync sync;
+    CHECK(!cv_dec_acq(&first, &sync, &handle) && first == 0);
+    CHECK(!gs_try_wait(&sync));
+    int64_t pts; bool end;
+    CHECK(properties(&d, first, &pts, &end) == CV_NONE && !d.clock.started);
+    virtual_ns = 5000000000ull;
+    publish(&d, 9000000000ll, 90); submit_eof(&d);
+    CHECK(gs_try_wait(&sync));
+    CHECK(!properties(&d, first, &pts, &end) && !end && pts == 9000000000ll);
+    CHECK(d.clock.started && d.clock.start_pts == pts && d.clock.start_ns == virtual_ns);
+    CHECK(pool.img[first]->planes[0][0] == 90);
+    cv_dec_rel(&handle, first, sync);
+    int eos; consume(&d, &eos); CHECK(eos);
+    cleanup(&d, &pool);
+}
+
+static void reset_client_owned(int codec) {
+    cv_dec d; cv_pool pool; fixture(&d, &pool, 8, codec);
+    cv_dec *handle = &d; virtual_ns = 0;
+    for (unsigned i = 0; i < 4; i++) publish(&d, i * 16666667ll, (uint8_t)(32 + i));
+    uint32_t held; cv_sync sync; CHECK(!cv_dec_acq(&held, &sync, &handle) && held == 0);
+    vpx_image_t *image = pool.img[held]; uint32_t generation = d.buf[held].gen;
+    CHECK(!cv_dec_reset(&handle));
+    CHECK(d.buf[held].filled && d.buf[held].gen == generation && gs_try_wait(&sync));
+    CHECK(pool.img[held] == image && image->planes[0][0] == 32);
+    int64_t pts; bool end;
+    CHECK(!properties(&d, held, &pts, &end) && pts == 0 && !end);
+    CHECK(!d.clock.started);
+    CHECK(d.pcount == 7);
+    for (unsigned i = 0; i < 7; i++) CHECK(d.pend[(d.phead + i) % CV_BUFS] == i + 1);
+    virtual_ns = 6000000000ull;
+    publish(&d, 12000000000ll, 91); submit_eof(&d);
+    int eos; CHECK(consume(&d, &eos) == 12000000000ll && !eos);
+    CHECK(d.clock.start_pts == 12000000000ll && d.clock.start_ns == virtual_ns);
+    CHECK(!properties(&d, held, &pts, &end) && pts == 0 && !end);
+    CHECK(d.clock.start_pts == 12000000000ll && pool.img[held] == image);
+    cv_dec_rel(&handle, held, sync);
+    consume(&d, &eos); CHECK(eos);
+    cleanup(&d, &pool);
+}
+
+static void reset_pending_client(int codec) {
+    cv_dec d; cv_pool pool; fixture(&d, &pool, 8, codec);
+    cv_dec *handle = &d; virtual_ns = 0;
+    uint32_t held; cv_sync sync; CHECK(!cv_dec_acq(&held, &sync, &handle) && held == 0);
+    CHECK(!gs_try_wait(&sync));
+    CHECK(!cv_dec_reset(&handle));
+    CHECK(d.buf[held].gen == sync.gen && d.pcount == 8 && d.fcount == 7);
+    for (unsigned i = 0; i < 8; i++) CHECK(d.pend[(d.phead + i) % CV_BUFS] == i);
+    queues_valid(&d);
+    publish(&d, 7000000000ll, 92); submit_eof(&d);
+    int64_t pts; bool end;
+    CHECK(gs_try_wait(&sync));
+    CHECK(!properties(&d, held, &pts, &end) && pts == 7000000000ll && !end);
+    cv_dec_rel(&handle, held, sync);
+    int eos; consume(&d, &eos); CHECK(eos);
+    cleanup(&d, &pool);
+}
+
+static void reset_undelivered(void) {
+    cv_dec d; cv_pool pool; fixture(&d, &pool, 1, CV_AV1);
+    cv_dec *handle = &d; virtual_ns = 0;
+    publish(&d, 0, 16); ns2_movie_clock_start(&d.clock, virtual_ns, 0);
+    virtual_ns = 1000000000ull;
+    publish(&d, 16666667ll, 17); CHECK(d.last_skipped != NULL);
+    publish(&d, 2000000000ll, 18); submit_eof(&d);
+    CHECK(d.nheld == 1 && d.last_skipped && d.eos_pending);
+    CHECK(!cv_dec_reset(&handle));
+    CHECK(!d.nheld && !d.last_skipped && !d.eos_pending && !d.clock.started);
+    publish(&d, 10000000000ll, 93); submit_eof(&d);
+    int eos; CHECK(consume(&d, &eos) == 10000000000ll && !eos);
+    consume(&d, &eos); CHECK(eos);
+    cleanup(&d, &pool);
+}
+
+static void reset_unreleased(int codec) {
+    cv_dec d; cv_pool pool; fixture(&d, &pool, 8, codec);
+    cv_dec *handle = &d;
+    /* Register initially exposes an empty buffer; only Release makes it writable. */
+    d.pcount = 0;
+    for (unsigned i = 0; i < 8; i++) d.buf[i].gen = 0;
+    CHECK(!cv_dec_reset(&handle)); CHECK(!d.pcount && d.fcount == 8);
+    for (unsigned i = 0; i < 8; i++) CHECK(!d.buf[i].gen && !d.buf[i].filled);
+    cleanup(&d, &pool);
+}
+
 static void simulate(int fps, int hitch, int enabled, unsigned buffers) {
-    cv_dec d; cv_pool pool; fixture(&d, &pool, buffers);
+    cv_dec d; cv_pool pool; fixture(&d, &pool, buffers, CV_AV1);
     const int total = 180;
     int produced = 0, ended = 0, saw_eos = 0, displayed = 0;
     int64_t last_pts = -1, max_lag = 0;
@@ -103,7 +230,7 @@ static void simulate(int fps, int hitch, int enabled, unsigned buffers) {
 }
 
 static void ownership_and_reset(void) {
-    cv_dec d; cv_pool pool; fixture(&d, &pool, 8);
+    cv_dec d; cv_pool pool; fixture(&d, &pool, 8, CV_AV1);
     cv_dec *handle = &d;
     for (int i = 0; i < 8; i++) {
         cv_hold(&d, vpx_img_alloc(NULL, VPX_IMG_FMT_I420, 2, 2, 1), i * 16666667ll);
@@ -137,7 +264,17 @@ int main(int argc, char **argv) {
             simulate(120, 0, 1, buffers); simulate(30, 1, 1, buffers);
         }
     }
-    if (enabled) ownership_and_reset();
+    if (enabled) {
+        ownership_and_reset();
+        reset_undelivered();
+    }
+    /* Stop/Flush share their output-state contract for every codec, including
+       when AV1 presentation synchronization is disabled. */
+    for (int codec = CV_VP8; codec <= CV_AV1; codec++) {
+        reset_ready(1, 1, codec); reset_ready(8, 8, codec); reset_ready(8, 2, codec);
+        reset_client_owned(codec); reset_pending_client(codec); reset_unreleased(codec);
+        printf("reset codec=%s sync=%d\n", k_name[codec], enabled);
+    }
     printf("{\"status\":\"pass\",\"checks\":%u,\"sync\":%s}\n", checks, enabled ? "true" : "false");
     return 0;
 }

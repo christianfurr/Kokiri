@@ -91,7 +91,7 @@ typedef struct { uint16_t w, h; uint32_t fmt, mode, magic; uint32_t pad[2]; } cv
 typedef struct { uint32_t magic; uint16_t w, h; uint32_t fmt, count; vpx_image_t **img; } cv_pool;
 typedef struct { uint32_t magic, dec, idx, gen; } cv_sync;   /* nn::gs::NativeSyncHandle (16 bytes) */
 enum { CV_VP8, CV_VP9, CV_AV1 };
-typedef struct cv_buf { cv_pool *pool; uint32_t pidx; int reg, filled; uint32_t gen, filled_gen; uint16_t w, h; int64_t ts; uint8_t eos; } cv_buf;
+typedef struct cv_buf { cv_pool *pool; uint32_t pidx; int reg, filled; uint32_t gen, filled_gen; uint16_t w, h; int64_t ts; uint8_t eos, current_stream; } cv_buf;
 typedef struct {
     uint32_t magic, id; pthread_mutex_t mu; vpx_codec_ctx_t vpx; int vpx_ok; void *event; uint64_t submits, pictures;
     int codec; uint16_t w, h; mav1 *av1;
@@ -220,7 +220,7 @@ static void drain(cv_dec *d) {
             if (!d->pictures++) LOG("%s decoder %u: first picture %ux%u into buffer %u", k_name[d->codec], d->id, b->w, b->h, i);
         } else { b->w = b->h = 0; b->ts = 0; b->eos = 1; d->eos_pending = 0; }
         if (b->eos) LOG("%s decoder %u: end of stream after %llu pictures", k_name[d->codec], d->id, (unsigned long long)d->pictures);
-        b->filled = 1; b->filled_gen = b->gen;
+        b->filled = 1; b->filled_gen = b->gen; b->current_stream = 1;
         spt_fire(d, i);
     }
     if (d->event) { if (d->nheld < CV_HOLD) hle_signal_system_event(d->event); else clear_event(d->event); }
@@ -336,6 +336,32 @@ static Result cv_dec_reset(void *t) {   /* Stop / Flush: undelivered pictures an
     if (d->last_skipped) { vpx_img_free(d->last_skipped); d->last_skipped = NULL; }
     for (int i = 0; i < d->nheld; i++) vpx_img_free(d->held[i]);
     d->nheld = 0; d->eos_pending = 0;
+    uint8_t queued[CV_BUFS] = {0}, pending[CV_BUFS] = {0};
+    for (uint32_t k = 0; k < d->pcount; k++) pending[d->pend[(d->phead + k) % CV_BUFS]] = 1;
+    /* Client-held pictures retain their storage, properties and completed sync,
+       but cannot anchor the next stream's clock. Only unacquired pictures are
+       invalidated; their pool storage remains owned until a later publication. */
+    for (uint32_t i = 0; i < CV_BUFS; i++) d->buf[i].current_stream = 0;
+    for (uint32_t k = 0; k < d->fcount; k++) {
+        uint32_t i = d->fifo[(d->fhead + k) % 8]; cv_buf *b = &d->buf[i];
+        queued[i] = 1;
+        if (b->filled) { b->gen++; b->filled = 0; pending[i] = 1; }
+        b->w = b->h = 0; b->ts = 0; b->eos = 0;
+    }
+    /* A client may already be waiting on an acquired, unfilled buffer. Keep
+       those first, then refill unacquired buffers in FIFO order. Appending the
+       invalidated pictures after the pending suffix could strand the FIFO head
+       when the next stream contains only one picture and EOF. */
+    uint32_t writable[CV_BUFS], count = 0;
+    for (uint32_t k = 0; k < d->pcount; k++) {
+        uint32_t i = d->pend[(d->phead + k) % CV_BUFS];
+        if (!queued[i]) writable[count++] = i;
+    }
+    for (uint32_t k = 0; k < d->fcount; k++) {
+        uint32_t i = d->fifo[(d->fhead + k) % 8];
+        if (pending[i]) writable[count++] = i;
+    }
+    memcpy(d->pend, writable, count * sizeof *writable); d->phead = 0; d->pcount = count;
     cv_open(d);
     if (d->event) hle_signal_system_event(d->event);
     pthread_mutex_unlock(&d->mu);
@@ -439,8 +465,8 @@ static Result cv_dec_props(uint16_t *w, uint16_t *h, uint16_t *cw, uint16_t *ch,
     pthread_mutex_lock(&d->mu);
     int ok = d->buf[i].filled;
     if (ok) { *w = *cw = d->buf[i].w; *h = *ch = d->buf[i].h; *ts = d->buf[i].ts; *eos = d->buf[i].eos != 0; }
-    if (ok && !*eos) ns2_movie_clock_start(&d->clock, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), *ts);
-    if (ok && getenv("OOT_MOVIE_TRACE")) {
+    if (ok && !*eos && d->buf[i].current_stream) ns2_movie_clock_start(&d->clock, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), *ts);
+    if (ok && d->buf[i].current_stream && getenv("OOT_MOVIE_TRACE")) {
         uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
         if (!d->trace_at || now - d->trace_at >= 1000000000ull) {
             LOG("[movie-trace] decoder=%u now_ns=%llu pts=%lld pictures=%llu dropped=%llu fifo=%u pending=%u held=%d submits=%llu", d->id,

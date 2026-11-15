@@ -22,8 +22,17 @@ their ownership, generation and sync-event rules.
 
 At most one discarded picture is retained until the next publication or EOF,
 so an empty EOF packet cannot lose the movie's final image. Reset/flush clears
-the clock and retained picture. VP8/VP9 behavior is unchanged. No audio delay,
-balance adjustment, frame generation or game-clock/physics change is applied.
+the clock and retained picture. Presentation catch-up is AV1-only. No audio
+delay, balance adjustment, frame generation or game-clock/physics change is applied.
+
+Reset also invalidates published pictures that the client has not acquired,
+including a queued EOF. Previously those outputs survived a reset and could
+anchor the next stream to an old timestamp. Acquired pictures keep their
+storage, properties and completed sync handles, but their timestamps cannot
+start the next stream's clock. Acquired buffers awaiting completion keep their
+place before unacquired buffers, which refill in acquisition order. This reset
+contract is tested for AV1, VP8 and VP9 with movie synchronization on and off;
+the presentation catch-up behavior remains AV1-only.
 
 Diagnostic environment variables:
 
@@ -49,10 +58,14 @@ make -C engine WORK=/external/work \
 The AddressSanitizer/UndefinedBehaviorSanitizer probe covers one and eight
 output buffers, 24/30/60/120 FPS consumers, a 750 ms consumer stall, final-image
 and EOF delivery, reset, client-held buffer ownership, and timestamp bounds.
-The enabled cases pass 19,577 checks. The disabled comparison passes 3,877
-checks that specifically confirm the old accumulated lag: about 3.103 seconds
-behind after a three-second source at 30 rendered FPS. These synthetic tests
-supplement actual AV1 playback; they do not replace it.
+The current enabled cases pass 21,927 checks. The disabled comparison passes
+5,356 checks, including the old accumulated lag: about 3.103 seconds behind
+after a three-second source at 30 rendered FPS. Both runs also cover reset
+with fully and partially published queues, client-held pictures, acquired
+buffers awaiting completion, unreleased registrations and queued EOF for all
+three codec families. The fixtures exercise real generation/sync completion
+with synthetic owned pictures; they do not decode actual codec bitstreams or
+replace AV1 playback and listening verification.
 
 ## Stereo routing
 
