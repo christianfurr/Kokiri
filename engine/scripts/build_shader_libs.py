@@ -221,6 +221,7 @@ def main():
         report=dict(schema=1,compiler=identity,complete=False,subset=bool(a.only),sources=source_hashes,
                     files=progress_files,parser_depths=parser_depths,compiler_observation=observation,
                     compiler_context_sha256=context_key,
+                    compiler_context_schema=2,
                     variant_caches=variant_caches,preparation_sha256=digest(Path(__file__).resolve()))
         partial=manifest.with_suffix('.partial');partial.write_text(json.dumps(report,indent=2)+'\n');partial.replace(manifest)
     checkpoint()
@@ -256,6 +257,7 @@ def main():
     report = dict(schema=1, compiler=identity, complete=not failed, subset=bool(a.only), sources=source_hashes, files=files,
                   compiler_observation=observation,
                   compiler_context_sha256=context_key,
+                  compiler_context_schema=2,
                   variant_caches=variant_caches,
                   parser_depths={k: v for k, v in parser_depths.items() if k in files},
                   preparation_sha256=digest(Path(__file__).resolve()))

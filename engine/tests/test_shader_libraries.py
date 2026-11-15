@@ -17,29 +17,60 @@ toolchain=sys.modules['metal_toolchain']
 
 
 class LibraryTests(unittest.TestCase):
+    def qualified_observation(self):
+        return dict(qualified=True, backend='metal', version='fixture',
+                    executable_sha256='a'*64, effective_target='air64-apple-macosx26.0',
+                    effective_flags=libraries.METAL_FLAGS, sdk_mode='compiler-default-resource-headers',
+                    resource_headers=dict(content_sha256='c'*64), host_identity=dict(os_build='fixture-build'),
+                    tool_components=[dict(role=role, executable_sha256=digest*64, dependencies=[])
+                                     for role, digest in [('driver', 'a'), ('frontend', 'b'), ('linker', 'c')]],
+                    required_files=[dict(role='selected-invocation-input', sha256='d'*64)],
+                    effective_invocations=[['fixture-frontend', '-cc1'], ['fixture-linker']])
+
     def test_compiler_observation_hashes_selected_headers_and_actual_binary(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             compiler = root/'metal'
             compiler.write_bytes(b'fixture compiler')
+            frontend, linker, archive, dependency = (root/name for name in ('metal-frontend', 'air-lld', 'libmetal.a', 'libfixture.dylib'))
+            for component in (frontend, linker, archive, dependency):
+                component.write_bytes(('fixture '+component.name).encode())
             resource = root/'resource'
             headers = resource/'include/metal'
             headers.mkdir(parents=True)
             header = headers/'metal_stdlib'
             header.write_text('fixture header')
-            plan = f'"metal" "-cc1" "-triple" "air64-apple-macosx26.0" "-resource-dir" "{resource}"'
-
             def driver(command, **kwargs):
-                text = plan if '-###' in command else ''
-                return subprocess.CompletedProcess(command, 0, 'fixture-sdk', text)
+                if '-###' in command:
+                    self.assertNotIn('-c', command)
+                    plan = (f'"{frontend}" "-cc1" "-triple" "air64-apple-macosx26.0" "-resource-dir" "{resource}" '
+                            f'"-o" "/tmp/identity-abcd.air" "{command[-1]}"\n'
+                            f'"{linker}" "-o" "{command[command.index("-o")+1]}" "/tmp/identity-abcd.air" "{archive}"')
+                    return subprocess.CompletedProcess(command, 0, '', plan)
+                if command[0] == 'otool':
+                    dependencies = [str(dependency)] if Path(command[-1]).resolve() == frontend.resolve() else ['/usr/lib/libSystem.B.dylib']
+                    text = str(command[-1])+':\n'+''.join('\t'+name+' (compatibility version 1.0.0, current version 1.0.0)\n' for name in dependencies)
+                    return subprocess.CompletedProcess(command, 0, text, '')
+                return subprocess.CompletedProcess(command, 0, 'fixture-sdk', '')
 
             with mock.patch.object(toolchain.subprocess, 'run', side_effect=driver):
                 first = toolchain.compiler_observation(str(compiler), 'same-version', {}, ['-safe'])
                 header.write_text('changed header')
                 second = toolchain.compiler_observation(str(compiler), 'same-version', {}, ['-safe'])
+                frontend.write_bytes(b'changed frontend')
+                third = toolchain.compiler_observation(str(compiler), 'same-version', {}, ['-safe'])
+                linker.write_bytes(b'changed linker')
+                fourth = toolchain.compiler_observation(str(compiler), 'same-version', {}, ['-safe'])
+                dependency.write_bytes(b'changed dynamically loaded library')
+                fifth = toolchain.compiler_observation(str(compiler), 'same-version', {}, ['-safe'])
             self.assertEqual(first['executable_sha256'], hashlib.sha256(compiler.read_bytes()).hexdigest())
             self.assertEqual(first['resource_headers']['files'], 1)
             self.assertNotEqual(libraries.compiler_context_key(first), libraries.compiler_context_key(second))
+            self.assertEqual([component['role'] for component in first['tool_components']], ['driver', 'frontend', 'linker'])
+            self.assertEqual(first['required_files'][0]['sha256'], libraries.digest(archive))
+            self.assertNotEqual(libraries.compiler_context_key(second), libraries.compiler_context_key(third))
+            self.assertNotEqual(libraries.compiler_context_key(third), libraries.compiler_context_key(fourth))
+            self.assertNotEqual(libraries.compiler_context_key(fourth), libraries.compiler_context_key(fifth))
             moved = dict(first, path='/different/path', driver_plan='different diagnostics',
                          driver_plan_sha256='ignored diagnostics')
             self.assertEqual(libraries.compiler_context_key(first), libraries.compiler_context_key(moved))
@@ -47,6 +78,10 @@ class LibraryTests(unittest.TestCase):
     def test_same_version_changed_binary_target_or_headers_recompiles(self):
         changes = [dict(executable_sha256='b'*64), dict(effective_target='air64-apple-macosx27.0'),
                    dict(resource_headers=dict(content_sha256='d'*64))]
+        for index in (1, 2):
+            components = self.qualified_observation()['tool_components']
+            components[index]['executable_sha256'] = 'f'*64
+            changes.append(dict(tool_components=components))
         for change in changes:
             with self.subTest(change=change), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
@@ -58,11 +93,7 @@ class LibraryTests(unittest.TestCase):
                 out.mkdir()
                 library = out/(libraries.digest(source)+'.metallib')
                 library.write_bytes(b'old library')
-                observation = dict(qualified=True, backend='metal', version='fixture',
-                                   executable_sha256='a'*64, effective_target='air64-apple-macosx26.0',
-                                   effective_flags=libraries.METAL_FLAGS,
-                                   sdk_mode='compiler-default-resource-headers',
-                                   resource_headers=dict(content_sha256='c'*64))
+                observation = self.qualified_observation()
                 old_key = libraries.compiler_context_key(observation)
                 old_identity = ' '.join(['fixture', *libraries.METAL_FLAGS, 'context-sha256='+old_key])
                 (out/'compiler.txt').write_text(old_identity)
@@ -87,6 +118,21 @@ class LibraryTests(unittest.TestCase):
                 manifest = json.loads((out/'libraries-manifest.json').read_text())
                 self.assertNotEqual(manifest['compiler_context_sha256'], old_key)
                 self.assertEqual(library.read_bytes(), b'new library')
+
+    def test_qualified_context_cannot_omit_frontend_linker_or_dependency_identity(self):
+        for role in ('frontend', 'linker'):
+            observation = self.qualified_observation()
+            observation['tool_components'] = [item for item in observation['tool_components'] if item['role'] != role]
+            with self.assertRaisesRegex(ValueError, 'component or host identities'):
+                libraries.compiler_context_key(observation)
+        observation = self.qualified_observation()
+        observation['tool_components'][1]['dependencies'] = [dict(binding='hashed-file')]
+        with self.assertRaisesRegex(ValueError, 'dependency lacks content identity'):
+            libraries.compiler_context_key(observation)
+
+    def test_library_driver_plan_must_include_linker(self):
+        with self.assertRaisesRegex(ValueError, 'selected linker'):
+            toolchain.driver_commands('"/fixture/metal" "-cc1" "-c"')
 
     def runtime_cache(self, root, name='runtime', chain=None):
         cache = root/name
