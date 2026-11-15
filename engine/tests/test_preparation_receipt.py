@@ -17,7 +17,7 @@ class PreparationReceiptTests(unittest.TestCase):
         self.identity = dict(chain='oot-native-v28-mesh-primitive-blocks', source_romfs_sha256='a' * 64,
                              translator_sha256='b' * 64, nvn_depth_mode='minus-w')
         self.seed = dict(self.identity, version='oot', all_default=True, only=None,
-                         translation_context_sha256='c' * 64, runtime_sha256='d' * 64,
+                         translation_context_sha256='c' * 64, runtime_sha256='f' * 64,
                          corpus_shaders=2, translated_default=2, listed_asked=1, listed_variants=1,
                          shaders=3, files={'first_b.metal': '1' * 64,
                                            'second_b.metal': '2' * 64, 'binding_b.metal': '3' * 64})
@@ -80,6 +80,32 @@ class PreparationReceiptTests(unittest.TestCase):
         self.assertEqual(result['identity']['chain'], self.identity['chain'])
         self.assertEqual(result['artifact_sha256'], self.artifacts)
         self.assertIn('unobserved', result['limitation'])
+
+    def test_changed_runtime_without_request_revalidation_is_not_prepared(self):
+        self.artifacts['runtime_sha256'] = '0' * 64
+        self.pipelines['runtime_sha256'] = '0' * 64
+        result = self.reject('seed requests were not verified by the packaged runtime')
+        self.assertEqual(result['identity']['seed_runtime_sha256'], 'f' * 64)
+        self.assertEqual(result['identity']['runtime_sha256'], '0' * 64)
+
+    def test_manifest_with_current_runtime_request_proof_can_be_prepared(self):
+        self.artifacts['runtime_sha256'] = '0' * 64
+        self.pipelines['runtime_sha256'] = '0' * 64
+        self.seed['runtime_sha256'] = '0' * 64
+        result = receipt.require_prepared(self.make())
+        self.assertEqual(result['identity']['seed_runtime_sha256'], result['identity']['runtime_sha256'])
+        self.assertEqual(result['identity']['translation_context_sha256'], 'c' * 64)
+        self.assertEqual(result['identity']['chain'], self.identity['chain'])
+
+    def test_missing_seed_runtime_request_proof_is_not_prepared(self):
+        self.seed.pop('runtime_sha256')
+        self.reject('seed request proof lacks a valid runtime SHA-256')
+
+    def test_invalid_seed_runtime_request_proof_is_not_prepared(self):
+        for invalid in (None, 123, 'invalid', 'f' * 63, 'f' * 65):
+            with self.subTest(invalid=invalid):
+                self.seed['runtime_sha256'] = invalid
+                self.reject('seed request proof lacks a valid runtime SHA-256')
 
     def test_shared_msl_hash_counts_source_coverage_and_unique_files_separately(self):
         self.seed.update(shaders=2, listed_asked=0, listed_variants=0,

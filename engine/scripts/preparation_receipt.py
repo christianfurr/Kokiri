@@ -67,6 +67,12 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
             errors.append('invalid expected SHA-256: ' + field)
     if not DIGEST.fullmatch(str(seed.get('translation_context_sha256', ''))):
         errors.append('missing translation context SHA-256')
+    if mode == 'full':
+        seed_runtime = seed.get('runtime_sha256')
+        if not isinstance(seed_runtime, str) or not DIGEST.fullmatch(seed_runtime):
+            errors.append('seed request proof lacks a valid runtime SHA-256')
+        elif seed_runtime != artifact_sha256.get('runtime_sha256'):
+            errors.append('seed requests were not verified by the packaged runtime')
     if seed.get('version') != 'oot' or seed.get('all_default') is not True:
         errors.append('seed does not attest complete OoT default requests')
     if seed.get('only') is not None:
