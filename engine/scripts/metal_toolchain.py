@@ -142,6 +142,9 @@ def compiler_context_key(observation):
             not isinstance(observation.get('effective_target'), str) or not observation['effective_target'] or
             observation.get('sdk_mode') != 'compiler-default-resource-headers'):
             raise ValueError('qualified Metal compiler observation lacks component or host identities')
+        if observation.get('loader_environment_policy') != 'reject-nonempty-DYLD':
+            raise ValueError('qualified Metal compiler observation lacks the required loader environment policy')
+        context['loader_environment_policy'] = observation['loader_environment_policy']
         invocations = observation.get('effective_invocations')
         if (not isinstance(invocations, list) or len(invocations) != len(components)-1 or
             any(not isinstance(argv, list) or not argv or any(not isinstance(arg, str) for arg in argv) for argv in invocations) or

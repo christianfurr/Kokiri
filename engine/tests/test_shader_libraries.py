@@ -20,6 +20,7 @@ class LibraryTests(unittest.TestCase):
     def qualified_observation(self):
         return dict(qualified=True, backend='metal', version='fixture',
                     observation_schema=2,
+                    loader_environment_policy='reject-nonempty-DYLD',
                     executable_sha256='a'*64, effective_target='air64-apple-macosx26.0',
                     effective_flags=libraries.METAL_FLAGS, sdk_mode='compiler-default-resource-headers',
                     resource_headers=dict(content_sha256='c'*64),
@@ -156,6 +157,23 @@ class LibraryTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, 'nonempty DYLD_'):
                         toolchain.compiler_observation(str(compiler), 'fixture', {variable: '/fixture'}, ['-safe'])
                     run.assert_not_called()
+
+    def test_qualified_loader_policy_is_required_and_bound_in_reuse_key(self):
+        for policy in (None, 'unobserved'):
+            observation = self.qualified_observation()
+            if policy is None:
+                observation.pop('loader_environment_policy')
+            else:
+                observation['loader_environment_policy'] = policy
+            with self.assertRaisesRegex(ValueError, 'loader environment policy'):
+                libraries.compiler_context_key(observation)
+        with mock.patch.object(toolchain.json, 'dumps', wraps=json.dumps) as encode:
+            key = libraries.compiler_context_key(self.qualified_observation())
+        context = encode.call_args.args[0]
+        self.assertEqual(context['loader_environment_policy'], 'reject-nonempty-DYLD')
+        context_without_policy = {name: value for name, value in context.items() if name != 'loader_environment_policy'}
+        previous_key = hashlib.sha256(json.dumps(context_without_policy, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        self.assertNotEqual(key, previous_key)
 
     def test_recorded_working_directory_is_conservatively_bound(self):
         first = self.qualified_observation()
