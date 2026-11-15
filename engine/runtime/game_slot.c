@@ -58,7 +58,9 @@ static int preemption_fd = -1, preemption_retained;
 
 int runtime_game_slot_agent_close_begin(void) {
     pthread_mutex_lock(&agent_ownership_mutex);
-    if (atomic_load_explicit(&agent_user_takeover, memory_order_acquire)) {
+    const char *requested=getenv("TOTK_SLOT_OWNER");
+    if (atomic_load_explicit(&agent_user_takeover, memory_order_acquire) || !strcmp(owner,"user") ||
+        (requested && !strcmp(requested,"user"))) {
         pthread_mutex_unlock(&agent_ownership_mutex); return 0;
     }
     return 1;

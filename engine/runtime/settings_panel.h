@@ -826,6 +826,10 @@ static void settings_footer_note(NSString *text, BOOL bad);
    截图分享 page shows the folder and calls this (user 2026-11-11: moved there from the input page). An iPhone and an
    iPad have no panel here: their pictures go into the photo library, in the album named after the game. */
 __attribute__((unused)) static void settings_choose_screenshot_folder(void) {
+ if(getenv("KOKIRI_HUMAN_PREVIEW_ROOT")) {
+  settings_footer_note(@(TOTK_UI("预览截图保存在专用文件夹","Preview captures stay in the private session folder")),NO);
+  return;
+ }
  char now[PATH_MAX];screenshot_directory(now,sizeof now);
  NSOpenPanel *panel=[NSOpenPanel openPanel];
  panel.canChooseFiles=NO;panel.canChooseDirectories=YES;panel.allowsMultipleSelection=NO;

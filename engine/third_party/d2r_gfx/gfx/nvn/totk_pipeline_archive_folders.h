@@ -21,15 +21,18 @@ static pthread_mutex_t g_par_wmu = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic uint64_t g_par_ga_removed;
 static NSArray<NSDictionary *> *g_par_probe_ga_dirs;   // native archive probe only: isolated owned/shared folders
 extern int runtime_kokiri_development_active(void) __attribute__((weak_import));
+extern int runtime_kokiri_private_paths_ready(void) __attribute__((weak_import));
 static NSArray<NSDictionary *> *par_ga_dirs(void) {   // @{path, own}
     if (g_par_probe_ga_dirs) return g_par_probe_ga_dirs;
     /* A claimed development entry fails closed after expiry/revocation, rather
        than falling back to the player's cache cleanup paths. This redirects our
        helper's locks/cleanup only; Apple's builder cache remains OS-managed. */
     const char *development = getenv("KOKIRI_DEVELOPMENT_ROOT");
-    if (development) {
-        if (!runtime_kokiri_development_active || !runtime_kokiri_development_active()) return @[];
-        NSString *dir = [@(development) stringByAppendingPathComponent:@"cache/archive-helper/com.apple.gpuarchiver"];
+    const char *preview = getenv("KOKIRI_HUMAN_PREVIEW_ROOT");
+    if (development || preview) {
+        if (preview ? (!runtime_kokiri_private_paths_ready || !runtime_kokiri_private_paths_ready()) :
+                      (!runtime_kokiri_development_active || !runtime_kokiri_development_active())) return @[];
+        NSString *dir = [@(preview ?: development) stringByAppendingPathComponent:@"cache/archive-helper/com.apple.gpuarchiver"];
         return @[@{@"path": dir, @"own": @YES}];
     }
     static NSArray *dirs; static dispatch_once_t once;

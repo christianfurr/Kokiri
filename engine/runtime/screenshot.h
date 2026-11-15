@@ -170,6 +170,10 @@ __attribute__((unused)) static int screenshot_directory_set(const char *typed, c
     char folder[PATH_MAX] = {0};
     *problem = SHOT_OK;
     if (free_bytes) *free_bytes = 0;
+    if (getenv("KOKIRI_HUMAN_PREVIEW_ROOT")) {
+        *why = TOTK_UI("预览截图保存在专用文件夹", "Preview captures stay in the private session folder");
+        return 0;
+    }
     if (typed && *typed) {
         if (strlen(typed) >= sizeof folder) { *problem = SHOT_PATH_LONG; *why = screenshot_problem_text(*problem); return 0; }
         char room[PATH_MAX];

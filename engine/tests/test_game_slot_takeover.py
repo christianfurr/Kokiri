@@ -116,7 +116,12 @@ int main(int argc,char **argv) { @autoreleasepool {
         }
         return 0;
     }
-    snprintf(owner,sizeof owner,"codex");snprintf(purpose,sizeof purpose,"fixture");
+    if(!strcmp(argv[2],"human-before-slot")) {
+        setenv("TOTK_SLOT_OWNER","user",1);
+        int allowed=runtime_game_slot_agent_close_begin();if(allowed)runtime_game_slot_agent_close_end();
+        printf("{\"allowed\":%d}\n",allowed);return 0;
+    }
+    snprintf(owner,sizeof owner,"%s",!strcmp(argv[2],"human-owned") ? "user" : "codex");snprintf(purpose,sizeof purpose,"fixture");
     snprintf(mode_name,sizeof mode_name,"boot");snprintf(token,sizeof token,"fixture");
     acquired=1;acquired_at=time(NULL);holder_write();window=[FixtureWindow new];
     if(!strcmp(argv[2],"protect")||!strcmp(argv[2],"protect-io-failure")) {
@@ -134,7 +139,7 @@ int main(int argc,char **argv) { @autoreleasepool {
     }
     if(!strcmp(argv[2],"ordinary"))runtime_front_request_close();
     else agent_close(AGENT_LIMIT_OVER,100,0,0);
-    if(strcmp(argv[2],"agent-owned")) {
+    if(strcmp(argv[2],"agent-owned") && strcmp(argv[2],"human-owned")) {
         runtime_game_slot_user_takeover();
         for(unsigned i=0;i<10;i++)agent_stop_if_owned();
     }
@@ -173,6 +178,15 @@ int main(int argc,char **argv) { @autoreleasepool {
         self.assertEqual(result["closes"], 0)
         self.assertEqual(result["owner"], "user")
         self.assertEqual(result["taken_over"], 1)
+
+    def test_human_owner_refuses_agent_close_without_physical_takeover(self):
+        result = self.run_fixture("human-owned")
+        self.assertEqual(result["closes"], 0)
+        self.assertEqual(result["taken_over"], 0)
+        self.assertEqual(result["owner"], "user")
+
+    def test_human_owner_refuses_agent_close_before_slot_acquisition(self):
+        self.assertEqual(self.run_fixture("human-before-slot")["allowed"], 0)
 
     def test_agent_escalation_stays_disarmed_after_takeover(self):
         result = self.run_fixture("takeover")

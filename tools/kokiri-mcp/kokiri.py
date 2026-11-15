@@ -386,7 +386,7 @@ class SessionStore:
             raise KokiriError("Choose game, timings, presented, status, process or events.")
         name = LOG_FILES[kind]
         executable = metadata.get("executable")
-        if (kind == "game" and not (folder/name).exists()
+        if (kind == "game" and metadata.get("kind") != "human-preview" and not (folder/name).exists()
                 and isinstance(executable, str) and Path(executable).name == "KokiriGame"
                 and self.verified_process(metadata)):
             global_log = Path.home()/"Library/Logs/Kokiri"
@@ -446,13 +446,14 @@ class SessionStore:
         return None
 
     def capture_request(self, session_id: str, surface: str = "window") -> Path:
-        _, metadata = self.entry(session_id)
+        session, metadata = self.entry(session_id)
         sample = self.verified_process(metadata)
         if not sample:
             raise KokiriError("The game process identity changed; no screenshot was requested.")
         if surface not in {"window", "game_frame"}:
             raise KokiriError("Choose window or game_frame capture.")
-        folder = self.managed_directory(self.development/"Captures"/session_id)
+        folder = self.managed_directory(session/"captures" if metadata.get("kind") == "human-preview"
+                                        else self.development/"Captures"/session_id)
         with self.capture_lock:
             # Multiple hosts can run this stdio server against the same tree.
             # Lock the directory itself: no persistent lockfile or stale owner

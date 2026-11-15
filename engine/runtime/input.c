@@ -22,6 +22,7 @@ static int32_t kokiriDevAxes[4];   /* inputLock: bounded development input, clea
 static _Atomic int kokiriDevInputActive;static int64_t kokiriDevDelivered;static uint64_t kokiriDevButtons;
 extern int runtime_kokiri_development_active(void) __attribute__((weak_import));
 extern void runtime_kokiri_development_user_takeover(void) __attribute__((weak_import));
+extern int runtime_kokiri_human_preview_command_allowed(const char *) __attribute__((weak_import));
 /* Scripted and auto-load presses (runtime_input_key_synthetic: TOTK_INPUT_SCRIPT, TOTK_INPUT_FILE, autoload.c) keep this
    fixed layout, whatever the player's, so test scripts mean the same keys on every Mac: J A, K / Space B, I X, U Y, Q / E
    L / R, Option / Shift ZL / ZR, Return +, Tab / Esc -, F T H G the d-pad, Z / C the stick presses; W A S D and the arrow
@@ -331,6 +332,8 @@ static void *input_file(void *arg) {
             }
             continue;
         }
+        if(getenv("KOKIRI_HUMAN_PREVIEW_ROOT") && (!runtime_kokiri_human_preview_command_allowed ||
+           !runtime_kokiri_human_preview_command_allowed(line)))continue;
         runtime_slot_activity(0);   /* any command keeps an agent's game open (a line the reader refuses ends the game) */
         if (kokiri_dev_command(line)) continue;
         /* The dedicated entry accepts authenticated typed controls only. Normal

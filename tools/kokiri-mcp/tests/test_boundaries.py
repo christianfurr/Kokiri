@@ -72,6 +72,21 @@ class BoundaryTests(unittest.TestCase):
             self.assertEqual(self.store.logs(self.identifier, 'game', 1)['lines'], [])
         read.assert_called_once_with(self.folder, 'game-full.log', 1)
 
+    def test_human_preview_uses_private_capture_directory(self):
+        self.metadata['kind'] = 'human-preview'
+        atomic_json(self.folder/'session.json', self.metadata)
+        destination = self.store.capture_request(self.identifier, 'game_frame')
+        self.assertEqual(destination.parent, self.folder/'captures')
+        self.assertFalse((self.store.development/'Captures').exists())
+        self.assertEqual((self.folder/'input.txt').read_text(), 'wshot '+str(destination)+'\n')
+
+    def test_human_preview_missing_log_never_reads_shared_log(self):
+        self.metadata['kind'] = 'human-preview'
+        atomic_json(self.folder/'session.json', self.metadata)
+        with patch('kokiri.tail', return_value=[]) as read:
+            self.assertEqual(self.store.logs(self.identifier, 'game', 1)['lines'], [])
+        read.assert_called_once_with(self.folder, 'game-full.log', 1)
+
     def test_invalid_executable_metadata_keeps_recorded_log_readable(self):
         for executable in [None, 123]:
             self.metadata['executable'] = executable
