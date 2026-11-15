@@ -3,8 +3,10 @@ import copy
 import importlib.util
 from pathlib import Path
 import unittest
+import sys
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/preparation_receipt.py'
+sys.path.insert(0, str(SCRIPT.parent))
 spec = importlib.util.spec_from_file_location('preparation_receipt', SCRIPT)
 receipt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(receipt)
@@ -23,6 +25,14 @@ class PreparationReceiptTests(unittest.TestCase):
                               compiler='Metal fixture -fpreserve-invariance -fwrapv',
                               sources=copy.deepcopy(self.seed['files']),
                               files={str(n) * 64 + '.metallib': 'e' * 64 for n in range(1, 4)})
+        observation = dict(qualified=True, backend='metal', path='/private/compiler', version='fixture',
+                           executable_sha256='8' * 64, effective_flags=['-mmacosx-version-min=26.0', '-fwrapv'],
+                           effective_target='air64-apple-macosx26.0.0', driver_plan='raw driver trace',
+                           driver_plan_sha256='9' * 64, sdk_mode='compiler-default-resource-headers',
+                           resource_headers={'content_sha256': '7' * 64},
+                           available_macos_sdk={'path': '/private/sdk', 'version': '26.0'})
+        self.libraries['compiler_observation'] = observation
+        self.libraries['compiler_context_sha256'] = receipt.compiler_context_key(observation)
         self.pipelines = dict(chain=self.identity['chain'], runtime_sha256='f' * 64,
                               render=2, compute=1, mesh=1, kept=2, failed=0, write_failed=0,
                               arch='fixture_gpu', listed_mesh=1, mesh_indexed=1)
@@ -59,19 +69,47 @@ class PreparationReceiptTests(unittest.TestCase):
         return name, digest
 
     def test_compiler_observation_is_preserved_without_inferred_jit_equivalence(self):
-        observation = dict(qualified=True, backend='metal', path='/private/compiler', version='fixture',
-                           executable_sha256='8' * 64, effective_flags=['-fwrapv'],
-                           effective_target='air64-apple-macosx26.0.0', driver_plan='raw driver trace',
-                           driver_plan_sha256='9' * 64, sdk_mode='compiler-default-resource-headers',
-                           available_macos_sdk={'path': '/private/sdk', 'version': '26.0'})
-        self.libraries['compiler_observation'] = observation
+        observation = self.libraries['compiler_observation']
         result = receipt.require_prepared(self.make())
         self.assertEqual(result['compiler_observation'], observation)
         observation['effective_flags'].append('changed after receipt')
-        self.assertEqual(result['compiler_observation']['effective_flags'], ['-fwrapv'])
+        self.assertEqual(result['compiler_observation']['effective_flags'], ['-mmacosx-version-min=26.0', '-fwrapv'])
 
-    def test_compiler_observation_is_optional_for_existing_manifests(self):
-        self.assertIsNone(receipt.require_prepared(self.make())['compiler_observation'])
+    def test_missing_compiler_observation_cannot_be_prepared(self):
+        self.libraries.pop('compiler_observation')
+        self.reject('requires a qualified compiler observation')
+
+    def test_unqualified_compiler_observation_cannot_be_prepared(self):
+        self.libraries['compiler_observation']['qualified'] = False
+        self.reject('requires a qualified compiler observation')
+
+    def test_wrong_compiler_backend_cannot_be_prepared(self):
+        self.libraries['compiler_observation']['backend'] = 'other'
+        self.reject('compiler observation backend is not Metal')
+
+    def test_missing_compiler_executable_digest_cannot_be_prepared(self):
+        self.libraries['compiler_observation'].pop('executable_sha256')
+        self.reject('lacks executable SHA-256')
+
+    def test_missing_resource_header_digest_cannot_be_prepared(self):
+        self.libraries['compiler_observation'].pop('resource_headers')
+        self.reject('lacks resource header SHA-256')
+
+    def test_wrong_target_cannot_be_prepared(self):
+        self.libraries['compiler_observation']['effective_target'] = 'air64-apple-macosx28.0.0'
+        self.reject('target is not macOS 26.0.0')
+
+    def test_missing_deployment_flag_cannot_be_prepared(self):
+        self.libraries['compiler_observation']['effective_flags'] = ['-fwrapv']
+        self.reject('lacks the macOS 26.0 deployment flag')
+
+    def test_missing_library_context_cannot_be_prepared(self):
+        self.libraries.pop('compiler_context_sha256')
+        self.reject('missing library compiler context SHA-256')
+
+    def test_changed_compiler_observation_invalidates_context(self):
+        self.libraries['compiler_observation']['version'] = 'different compiler'
+        self.reject('library compiler context differs from its observation')
 
     def test_observed_specializations_are_counted_separately(self):
         self.add_observed_cache()

@@ -6,6 +6,11 @@ The receipt proves coverage of that exact requested work, not all future gamepla
 import copy
 import re
 
+try:
+    from .metal_toolchain import compiler_context_key
+except ImportError:  # standalone script imports used by the build entry point
+    from metal_toolchain import compiler_context_key
+
 
 DIGEST = re.compile(r'^[0-9a-f]{64}$')
 COMMIT = re.compile(r'^[0-9a-f]{40,64}$')
@@ -88,6 +93,29 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
     compiler = libraries.get('compiler', '')
     if not isinstance(compiler, str) or not {'-fpreserve-invariance', '-fwrapv'} <= set(compiler.split()):
         errors.append('Metal compiler identity lacks required correctness options')
+    observation = libraries.get('compiler_observation')
+    compiler_context = libraries.get('compiler_context_sha256')
+    if mode == 'full':
+        if not isinstance(observation, dict) or observation.get('qualified') is not True:
+            errors.append('full preparation requires a qualified compiler observation')
+        else:
+            if observation.get('backend') != 'metal':
+                errors.append('compiler observation backend is not Metal')
+            if not DIGEST.fullmatch(str(observation.get('executable_sha256', ''))):
+                errors.append('compiler observation lacks executable SHA-256')
+            headers = observation.get('resource_headers')
+            if not isinstance(headers, dict) or not DIGEST.fullmatch(str(headers.get('content_sha256', ''))):
+                errors.append('compiler observation lacks resource header SHA-256')
+            flags = observation.get('effective_flags')
+            if not isinstance(flags, list) or '-mmacosx-version-min=26.0' not in flags:
+                errors.append('compiler observation lacks the macOS 26.0 deployment flag')
+            target = observation.get('effective_target')
+            if not isinstance(target, str) or not re.search(r'-apple-macosx26\.0\.0(?:$|-)', target):
+                errors.append('compiler observation target is not macOS 26.0.0')
+            if not DIGEST.fullmatch(str(compiler_context or '')):
+                errors.append('missing library compiler context SHA-256')
+            elif isinstance(headers, dict) and compiler_context != compiler_context_key(observation):
+                errors.append('library compiler context differs from its observation')
     sources = libraries.get('sources') if isinstance(libraries.get('sources'), dict) else {}
     library_files = libraries.get('files') if isinstance(libraries.get('files'), dict) else {}
     def library_covered(name, digest):
@@ -165,7 +193,7 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
                        mesh_requested=mesh_requested, mesh_indexed=mesh_indexed),
         observed_specializations=dict(requested=len(observed_sources), completed=observed_compiled,
                                       failed=len(observed_sources) - observed_compiled),
-        compiler_observation=copy.deepcopy(libraries.get('compiler_observation')),
+        compiler_observation=copy.deepcopy(observation), compiler_context_sha256=compiler_context,
         unresolved_inputs=copy.deepcopy(unresolved_inputs),
         artifact_sha256=dict(artifact_sha256), errors=errors,
         limitation='Coverage applies to the requested corpus, binding variants and pipeline lists; '
