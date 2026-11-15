@@ -26,7 +26,9 @@ The service shares metadata only; no game files, shaders, caches or saves.
 Both units run as the existing unprivileged user, with no new privileges or
 capabilities. User/mount namespaces hide the rest of the home directory; only
 the catalog root is visible read-only, and the service's data directory (or
-backup unit's snapshot directory) is writable. Private temporary/device views
+backup unit's snapshot directory) is writable. User/system D-Bus runtime paths
+are inaccessible; the HTTP/SQLite host does not need these session sockets.
+Private temporary/device views
 and the web service's Node filesystem permissions add separate boundaries. The
 backup process uses the OS filesystem sandbox without Node's permission mode:
 that mode disables `fsync`, which backups deliberately require for durability.

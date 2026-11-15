@@ -17,6 +17,7 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=tmpfs
+InaccessiblePaths=-%t -/run/dbus
 BindReadOnlyPaths=%h/.local/share/kokiri-catalog
 BindPaths=%h/.local/share/kokiri-catalog/backups
 ProtectKernelTunables=true
