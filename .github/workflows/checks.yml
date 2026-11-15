@@ -100,6 +100,9 @@ jobs:
           python3 -I -m unittest discover -s engine/tests -p test_development_launcher.py -v
           python3 -I -m unittest discover -s engine/tests -p test_development_input.py -v
           python3 -I -m unittest discover -s engine/tests -p test_game_slot_takeover.py -v
+          python3 -I -m unittest discover -s engine/tests -p test_human_preview_spawn.py -v
+          python3 -I -m unittest discover -s engine/tests -p test_preview_screenshot.py -v
+          python3 -I -m unittest discover -s engine/tests -p test_preview_archive_paths.py -v
       - run: python3 -I -m unittest discover -s engine/tests -p test_startup_view.py -v
       - run: python3 -I -m unittest discover -s engine/tests -p test_catalog_runtime.py -v
       - name: Check shader compiler identity and packaging gates
@@ -111,7 +114,8 @@ jobs:
           python3 -I -m unittest discover -s engine/tests -p test_storage_sweep.py -v
           python3 -I -m unittest discover -s engine/tests -p test_audio_renderer.py -v
       - name: Check actual runtime UI source
-        run: >-
-          xcrun clang -fsyntax-only -std=c11 -Wall -Wextra -Werror
-          -Wno-deprecated-declarations -fobjc-arc -DGAME_OOT=1 -DGAME_NS2=1
-          -Iengine/third_party/d2r_gfx/gfx/nvn/include engine/runtime/frontend.m
+        working-directory: engine
+        run: |
+          xcrun clang -fsyntax-only -std=c11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fobjc-arc -DGAME_OOT=1 -DGAME_NS2=1 -Ithird_party/d2r_gfx/gfx/nvn/include -Iruntime app/launcher.m
+          xcrun clang -fsyntax-only -std=c11 -Wall -Wextra -Werror -Wno-deprecated-declarations -DGAME_OOT=1 -DGAME_NS2=1 -Ithird_party/d2r_gfx/gfx/nvn/include -Iruntime runtime/input.c
+          xcrun clang -fsyntax-only -std=c11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fobjc-arc -DGAME_OOT=1 -DGAME_NS2=1 -Ithird_party/d2r_gfx/gfx/nvn/include -Iruntime runtime/frontend.m
