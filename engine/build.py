@@ -457,6 +457,29 @@ def shader_bundle(tree,record,mode='full'):
     temporary.rename(bundle);stamp.write_text(json.dumps(want)+'\n')
     return bundle
 
+def pipeline_archive_environment(tree,cache,seed):
+    """Use normal host libraries and precise math, regardless of diagnostic overrides."""
+    return dict(os.environ,TOTK_NATIVE_DIR=str(tree/'build'),TOTK_SHADER_CACHE=str(cache),
+                TOTK_SHADER_SEED_DIR=str(seed),TOTK_PIPELINE_ARCHIVE_HOST='1',TOTK_DEBUG_LOG='1',
+                TOTK_PAR_RECHECK='1',TOTK_WARM_THREADS=str(shader_jobs()),
+                TOTK_FAST_MATH='0',TOTK_SHADER_DEVICE_LIBS='0',OOT_UMUL_INLINE='0')
+
+def pipeline_library_inputs(libraries):
+    """Hash and inspect one manifest byte snapshot; no compiler or library execution."""
+    path=Path(libraries)/'libraries-manifest.json'
+    try:
+        raw=path.read_bytes()
+        manifest=json.loads(raw)
+    except (OSError,ValueError) as error:
+        raise ValueError('missing or invalid pipeline library manifest: '+str(path)) from error
+    if (not isinstance(manifest,dict) or
+            type(manifest.get('compiler_context_schema')) is not int or manifest['compiler_context_schema']!=2 or
+            not isinstance(manifest.get('compiler_context_sha256'),str) or
+            not re.fullmatch('[0-9a-f]{64}',manifest['compiler_context_sha256'])):
+        raise ValueError('pipeline libraries require a schema 2 compiler context: '+str(path))
+    return dict(libraries_manifest_sha256=hashlib.sha256(raw).hexdigest(),
+                compiler_context_sha256=manifest['compiler_context_sha256'],compiler_context_schema=2)
+
 def compute_pipeline_archive(work, tree, lists, mode='full'):
     """Build every seed compute pipeline and, with them, the render pipelines the App's warm-up lists name (lists: the
     pso_title.tsv / pso_manifest.tsv resolve_lists made from the current games/oot/assets/shader_list.tsv, the files the
@@ -466,7 +489,7 @@ def compute_pipeline_archive(work, tree, lists, mode='full'):
     if scripts not in sys.path:sys.path.insert(0,scripts)
     from prepare_compute_pipelines import compute_rows
     from dev.game_slot import GameSlot
-    seed,_,suffix=shader_dirs(tree,mode)
+    seed,libraries,suffix=shader_dirs(tree,mode)
     rows=compute_rows(seed)
     folder=tree/'build/compute-pipelines';folder.mkdir(parents=True,exist_ok=True)
     plan=folder/'compute.tsv';plan.write_text('\n'.join(rows)+'\n')
@@ -479,9 +502,7 @@ def compute_pipeline_archive(work, tree, lists, mode='full'):
     # 2026-11-11: "如何让 快速更新 不要这么容易失效"). Until then any runtime change threw it away: 17 min for 21,330 pipelines.
     logs=work/'logs';logs.mkdir(exist_ok=True)
     log=logs/'compute-pipelines.log'
-    env=dict(os.environ,TOTK_NATIVE_DIR=str(tree/'build'),TOTK_SHADER_CACHE=str(cache),
-             TOTK_SHADER_SEED_DIR=str(seed),TOTK_PIPELINE_ARCHIVE_HOST='1',TOTK_DEBUG_LOG='1',TOTK_PAR_RECHECK='1',
-             TOTK_WARM_THREADS=str(shader_jobs()))
+    env=pipeline_archive_environment(tree,cache,seed)
     lists_sha256={p.name:sha(p) for p in lists}   # check_archive_lists compares them with the files the App carries
     lists=[p for p in lists if p.is_file() and any(l and not l.startswith('#') for l in p.read_text().splitlines())]
     render_rows=sum(1 for p in lists for l in p.read_text().splitlines() if l.startswith(RENDER_ROWS))
@@ -489,9 +510,12 @@ def compute_pipeline_archive(work, tree, lists, mode='full'):
     requested=len({line for p in (plan,*lists) for line in p.read_text().splitlines()
                    if line.startswith(('C\t',*RENDER_ROWS,*MESH_ROWS))})
     print(f'Preparing {len(rows)} compute pipelines, {render_rows} listed render pipelines and {mesh_rows} listed mesh pipelines before packaging',flush=True)
+    library_inputs=pipeline_library_inputs(libraries)
     with GameSlot(owner='build',purpose='OOT offline pipelines',expect_seconds=3600),log.open('w') as f:
         tool=subprocess.run([work/'build/oot-native',tree/'rewritten/oot','pipeline-archive',plan,*lists],
                        cwd=tree,env=env,stdout=f,stderr=subprocess.STDOUT)   # exit 1 when any row failed: judged from its report below
+    if pipeline_library_inputs(libraries)!=library_inputs:
+        raise ValueError('pipeline library manifest or compiler context changed during archive preparation')
     reports=[json.loads(line) for line in log.read_text().splitlines() if line.startswith('{"render":')]
     if not reports:raise ValueError(f'pipeline archive exit {tool.returncode} without a completion report; see {log}')
     report=reports[-1]
@@ -511,6 +535,9 @@ def compute_pipeline_archive(work, tree, lists, mode='full'):
     report.update(planned=len(rows),listed_render=render_rows,listed_mesh=mesh_rows,mesh_indexed=mesh_indexed,lists=[p.name for p in lists],lists_sha256=lists_sha256,indexed=count,chain=chain,
                   plan_sha256=sha(plan),runtime_sha256=sha(work/'build/oot-native'),
                   requested=requested,completed=completed,
+                  **library_inputs,
+                  library_input_binding='intended manifest snapshot; actual library use and zero-JIT proof are not established by this record',
+                  counter_basis='render/compute count successful PSO creation including archive hits; kept does not count newly compiled pipelines',
                   files={p.name:sha(p)for p in sorted(target.iterdir()) if p.is_file() and p.name!='compute-manifest.json'})
     (target/'compute-manifest.json').write_text(json.dumps(report,indent=2)+'\n')
     return target
