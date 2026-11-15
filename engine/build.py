@@ -123,6 +123,7 @@ def runtime_metadata(mode, commit):
                 LSSupportsGameMode=True, GCSupportsControllerUserInteraction=True,
                 KokiriGameUpdate='131072', KokiriProductVersion=PRODUCT_VERSION,
                 KokiriLiveStatusVersion=1,
+                KokiriCatalogWarmVersion=1,
                 KokiriSourceCommit=commit or 'uncommitted', KokiriShaders=mode,
                 KokiriHUDPreferencesVersion=1)
 
@@ -519,6 +520,7 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
     temporary=out.with_name('.'+out.name+'.ready')
     if temporary.exists():raise ValueError('unfinished App staging directory exists; left untouched: '+str(temporary))
     mac=temporary/'Contents/MacOS';res=temporary/'Contents/Resources';data=res/'totk'
+    clone_file(GAME.parent/'assets/brand/kokiri-mark.png',res/'KokiriMark.png')
     mac.mkdir(parents=True);data.mkdir(parents=True)
     clone_file(work/'build/oot-native',mac/RUNTIME_EXECUTABLE)
     if pipelines:shutil.copytree(pipelines,data/'build/pipelines',copy_function=clone_file)
@@ -559,8 +561,10 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
     # builds it from its pinned source), so the App carries no dylib for it, only its license.
     clone_file(GAME/'third_party/dav1d-COPYING',res/'licenses/dav1d-COPYING')
     info=runtime_metadata(mode,build_helpers().source_commit())
-    icon=tree/'build/AppIcon.icns'   # the game's icon (assets/app-icon.json, made by build), as build_app.py puts it in the app
-    if icon.is_file():clone_file(icon,res/'AppIcon.icns');info['CFBundleIconFile']='AppIcon'
+    icon=tree/'build/KokiriAppIcon.icns'
+    subprocess.run(['bash',GAME.parent/'macos/scripts/create_icon.sh',
+                    GAME.parent/'assets/brand/kokiri-mark.png',icon],check=True)
+    clone_file(icon,res/'KokiriAppIcon.icns');info['CFBundleIconFile']='KokiriAppIcon'
     if game_data_mode=='library':info['MNGGameDataFolder']=str(game_data_folder)
     info['KokiriGameUpdate']='131072'
     info['KokiriProductVersion']=PRODUCT_VERSION
@@ -843,8 +847,6 @@ def build(args, source):
     shutil.copy2(proof.with_name('SPIRV-Tools.LICENSE'),service/'SPIRV-Tools.LICENSE')
     (tree/'build/shader-map.tsv').write_text('# TOTK control-code-sha256-v1\n')
     run(['make','-C',GAME,'WORK='+str(make_path(work)),'-j2'],'native-runtime',work)
-    icon_spec=GAME/'assets/app-icon.json'   # the dump has no Control data: the pinned official image, as Donkey Kong Bananza
-    if icon_spec.is_file():run([py,'scripts/extract_app_icon.py','--source-spec',icon_spec,'--output','build/AppIcon.icns'],'app-icon')
     mode='full' if device else shader_mode()
     if mode=='none':print('Shaders are not bundled (OOT_BUNDLE_SHADERS=0): translated at first use',flush=True)
     else:

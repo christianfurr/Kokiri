@@ -163,6 +163,7 @@ enum Destination: String, CaseIterable, Identifiable {
                     environment["DM_NVN_TSV"] = folder.appendingPathComponent("timings.tsv").path
                     environment["DM_NVN_TSV_CALLS"] = "0"
                 }
+                environment.merge(await catalog.launchEnvironment(runtime: verified.app, session: folder)) { _, new in new }
                 configuration.environment = environment
                 catalogCheckpoint = nil; catalogContext = nil
                 if catalog.consent == true {
@@ -205,12 +206,14 @@ enum Destination: String, CaseIterable, Identifiable {
     private func tick() {
         guard let runtime else { return }
         if runtime.isTerminated {
+            let endedInstallation = activeInstallation
             self.runtime = nil; activeInstallation = nil; connected = false
-            if let checkpoint = catalogCheckpoint, let context = catalogContext, let folder = sessionFolder {
-                catalog.ingestOwnedSession(file: KokiriPaths.profile.appendingPathComponent("pso_user.tsv"), checkpoint: checkpoint, context: context, session: folder)
+            if let endedInstallation, let folder = sessionFolder {
+                catalog.completeOwnedSession(session: folder, runtime: endedInstallation.app, checkpoint: catalogCheckpoint, referenceContext: catalogContext)
+            } else {
+                catalog.sessionFinished()
             }
             catalogCheckpoint = nil; catalogContext = nil
-            catalog.sessionFinished()
             return
         }
         guard let start = sampleStart, let folder = sessionFolder else { return }

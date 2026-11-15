@@ -15,6 +15,7 @@
 #include "totk_ui_lang.h"
 #include "gamepad_layout.h"
 #import "playtime.h"
+#import "kokiri_startup.h"
 #define TOTK_HDR_FRONTEND 1
 #include "../third_party/d2r_gfx/gfx/nvn/totk_hdr.h"
 #include "../third_party/d2r_gfx/gfx/nvn/totk_mfx_mode.h"
@@ -205,6 +206,7 @@ static void note_window_screen(void){
    (runtime_warm_title): the player sees the game from here on. */
 static void boot_overlay_hide(void){
  if(!bootOverlay||bootOverlay.hidden)return;
+ [bootProgress stopAnimation:nil];
  bootOverlay.hidden=YES;
  fprintf(stderr,"[totk-boot] %.3f start-up screen hidden\n",(runtime_now_ns()-bootStartNS)/1e9);
  if(totk_sr_picture)totk_sr_picture(window.isKeyWindow,runtime_front_window_visible()!=0);
@@ -212,7 +214,7 @@ static void boot_overlay_hide(void){
 void front_frame_presented(void){
  if(atomic_fetch_add_explicit(&presentedFrames,1,memory_order_relaxed)==0){
   fprintf(stderr,"[totk-boot] %.3f first presented frame\n",(runtime_now_ns()-bootStartNS)/1e9);
-  dispatch_async(dispatch_get_main_queue(), ^{if(!atomic_load(&warmPending)||atomic_load(&titleFree))boot_overlay_hide();});
+  dispatch_async(dispatch_get_main_queue(), ^{if(kokiri_startup_can_reveal(atomic_load(&presentedFrames),atomic_load(&warmPending),atomic_load(&titleFree)))boot_overlay_hide();});
  }
 }
 void runtime_boot_progress(const char *stage,uint64_t done,uint64_t total){
@@ -223,7 +225,7 @@ void runtime_boot_progress(const char *stage,uint64_t done,uint64_t total){
   if(!bootOverlay||bootOverlay.hidden)return;
   bootStage.stringValue=s;
   if(total){bootDetail.stringValue=[NSString stringWithFormat:@"%.1f / %.1f GB",done/1e9,total/1e9];
-   bootProgress.indeterminate=NO;bootProgress.doubleValue=(double)done/(double)total*100.0;}
+   bootProgress.indeterminate=NO;bootProgress.doubleValue=fmin(100.0,(double)done/(double)total*100.0);}
   else {bootDetail.stringValue=@(TOTK_UI("正在处理，请稍候","Working, please wait"));bootProgress.indeterminate=YES;[bootProgress startAnimation:nil];}
  });
 }
@@ -235,7 +237,8 @@ void runtime_boot_count(const char *stage,uint64_t done,uint64_t total){
  dispatch_async(dispatch_get_main_queue(), ^{
   if(!bootOverlay||bootOverlay.hidden)return;
   bootStage.stringValue=s;bootDetail.stringValue=[NSString stringWithFormat:@"%llu / %llu",(unsigned long long)done,(unsigned long long)total];
-  if(total){bootProgress.indeterminate=NO;bootProgress.doubleValue=(double)done/(double)total*100.0;}
+  if(total){bootProgress.indeterminate=NO;bootProgress.doubleValue=fmin(100.0,(double)done/(double)total*100.0);}
+  else{bootProgress.indeterminate=YES;[bootProgress startAnimation:nil];}
  });
 }
 void runtime_boot_status(const char *stage,const char *detail){
@@ -252,25 +255,25 @@ void runtime_warm_progress(uint64_t done,uint64_t total,uint64_t shaders,uint64_
  atomic_store(&warmPending,1);
  dispatch_async(dispatch_get_main_queue(), ^{
   if(!bootOverlay||bootOverlay.hidden)return;
-  double percent=total ? fmin(100.0,(double)done/(double)total*100.0) : 100.0;
-  bootStage.stringValue=[NSString stringWithFormat:@(TOTK_UI("预热着色器与管线 %.0f%%","Warming shaders and pipelines %.0f%%")),floor(percent)];
+  double percent=total ? fmin(100.0,(double)done/(double)total*100.0) : 0;
+  bootStage.stringValue=total?[NSString stringWithFormat:@(TOTK_UI("预热着色器与管线 %.0f%%","Warming shaders and pipelines %.0f%%")),floor(percent)]:@(TOTK_UI("预热着色器与管线","Warming shaders and pipelines"));
   bootDetail.stringValue=[NSString stringWithFormat:@(TOTK_UI("着色器 %llu/%llu · 管线 %llu/%llu","shaders %llu/%llu · pipelines %llu/%llu")),
       (unsigned long long)shaders,(unsigned long long)shader_total,
       (unsigned long long)pipelines,(unsigned long long)pipeline_total];
-  bootProgress.indeterminate=NO;
-  bootProgress.doubleValue=percent;
+  bootProgress.indeterminate=!total;
+  if(total)bootProgress.doubleValue=percent;else[bootProgress startAnimation:nil];
  });
 }
 void runtime_warm_done(void){
  atomic_store(&warmPending,0);
- dispatch_async(dispatch_get_main_queue(), ^{if(atomic_load(&presentedFrames))boot_overlay_hide();});
+ dispatch_async(dispatch_get_main_queue(), ^{if(kokiri_startup_can_reveal(atomic_load(&presentedFrames),atomic_load(&warmPending),atomic_load(&titleFree)))boot_overlay_hide();});
 }
 /* nvn_mtl.m warm_start, where the game's sound starts: the title may be seen. With the rest of the warm-up going on behind
    the menu (a Mac with a complete pipeline archive, TOTK_WARM_BEFORE_TITLE=0) the start-up screen covered a title that
    already played its music and took input until the warm-up ended (2026-10-30); it now goes with the first frame. */
 void runtime_warm_title(void){
  atomic_store(&titleFree,1);
- dispatch_async(dispatch_get_main_queue(), ^{if(atomic_load(&presentedFrames))boot_overlay_hide();});
+ dispatch_async(dispatch_get_main_queue(), ^{if(kokiri_startup_can_reveal(atomic_load(&presentedFrames),atomic_load(&warmPending),atomic_load(&titleFree)))boot_overlay_hide();});
 }
 uint64_t front_game_res(int docked){(void)docked;return (720ULL<<32)|1280;}
 /* TOTK_ASSUME_FOCUS=1: unattended test runs. macOS refuses to activate an app launched from the background while the user is working in
@@ -496,6 +499,9 @@ static NSString *hud_settings_hint(void) {
 }
 -(void)drawRect:(NSRect)dirtyRect {
  (void)dirtyRect;
+ CGFloat scale=kokiriHudScale/100.0;
+ [NSGraphicsContext saveGraphicsState];
+ NSAffineTransform *transform=[NSAffineTransform transform];[transform scaleBy:scale];[transform concat];
  int minFPS=-1,maxFPS=-1;
  for(NSUInteger i=0;i<_sampleCount;i++) {
   int fps=_samples[i];
@@ -511,9 +517,9 @@ static NSString *hud_settings_hint(void) {
  NSDictionary *statsStyle=@{NSFontAttributeName:[NSFont monospacedSystemFontOfSize:9 weight:NSFontWeightMedium],
   NSForegroundColorAttributeName:[NSColor colorWithCalibratedWhite:0.88 alpha:1]};
  [stats drawAtPoint:NSMakePoint(8,58) withAttributes:statsStyle];
- if(maxFPS<0)return;
+ if(maxFPS<0){[NSGraphicsContext restoreGraphicsState];return;}
 
- NSRect plot=NSMakeRect(40,12,self.bounds.size.width-50,36);
+ NSRect plot=NSMakeRect(40,12,fmax(1,self.bounds.size.width/scale-50),36);
  double axisLow=0,axisHigh=fmax(30,ceil(maxFPS*1.10/30)*30);
  double axisMid=(axisLow+axisHigh)/2;
 
@@ -564,6 +570,7 @@ static NSString *hud_settings_hint(void) {
  line.lineWidth=1.5;
  [line stroke];
  if(points==1)[[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(last.x-1,last.y-1,2,2)] fill];
+ [NSGraphicsContext restoreGraphicsState];
 }
 @end
 /* zeldaVR: the headset's picture on the Mac window (user 2026-10-29: "屏幕 显示 类似vr 那种 两个屏幕"): both eyes side by side,
@@ -962,17 +969,11 @@ void runtime_front_run(void(*callback)(void)){
   }
   metalLayer.drawableSize=CGSizeMake(ww,wh);runtime_aspect_view(ww,wh);
   metalLayer.framebufferOnly=NO;window.contentView.wantsLayer=YES;window.contentView.layer=metalLayer;
-  bootOverlay=[[NSView alloc] initWithFrame:window.contentView.bounds];bootOverlay.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
-  bootOverlay.wantsLayer=YES;bootOverlay.layer.backgroundColor=[NSColor colorWithCalibratedRed:0.035 green:0.075 blue:0.09 alpha:1].CGColor;
-  bootStage=[NSTextField labelWithString:@(TOTK_UI("正在启动海拉鲁","Starting Hyrule"))];
-  bootStage.font=[NSFont systemFontOfSize:25 weight:NSFontWeightSemibold];bootStage.textColor=NSColor.whiteColor;
-  bootStage.alignment=NSTextAlignmentCenter;bootStage.frame=NSMakeRect(0,wh/2+20,ww,40);bootStage.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin|NSViewMaxYMargin;
-  bootDetail=[NSTextField labelWithString:@(TOTK_UI("正在准备游戏环境","Preparing the game environment"))];
-  bootDetail.font=[NSFont systemFontOfSize:14];bootDetail.textColor=[NSColor colorWithCalibratedWhite:0.72 alpha:1];
-  bootDetail.alignment=NSTextAlignmentCenter;bootDetail.frame=NSMakeRect(0,wh/2-20,ww,28);bootDetail.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin|NSViewMaxYMargin;
-  bootProgress=[[NSProgressIndicator alloc] initWithFrame:NSMakeRect(ww/2-140,wh/2-55,280,10)];
-  bootProgress.minValue=0;bootProgress.maxValue=100;bootProgress.indeterminate=YES;bootProgress.autoresizingMask=NSViewMinXMargin|NSViewMaxXMargin|NSViewMinYMargin|NSViewMaxYMargin;
-  [bootOverlay addSubview:bootStage];[bootOverlay addSubview:bootDetail];[bootOverlay addSubview:bootProgress];
+  NSURL *logoURL=[NSBundle.mainBundle URLForResource:@"KokiriMark" withExtension:@"png"];
+  KokiriStartupView *startup=[[KokiriStartupView alloc] initWithFrame:window.contentView.bounds logoURL:logoURL];
+  bootOverlay=startup;bootStage=startup.stage;bootDetail=startup.detail;bootProgress=startup.progress;
+  bootStage.stringValue=@(TOTK_UI("正在启动游戏","Starting the game"));
+  bootDetail.stringValue=@(TOTK_UI("正在准备游戏环境","Preparing the game environment"));
   [window.contentView addSubview:bootOverlay];[bootProgress startAnimation:nil];
   front_menubar_fps();
   kokiri_hud_restore();settings_restore_start();

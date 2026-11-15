@@ -67,3 +67,11 @@ Current boundary: service/reference/native clients are locally implemented.
 A production trust key, public hosting and verified runtime adoption of the
 downloaded metadata artifact remain separate integration gates. No live catalog
 availability or performance gain is claimed.
+
+## Kokiri native handoff
+
+The native C/R handoff, execution identity producer and renderer admission hook
+are described in [runtime-handoff.md](runtime-handoff.md). They are CPU tested;
+actual gameplay adoption and public hosting remain unverified. Mesh pipelines
+and precompiled-library compiler provenance are not supported by that first
+adapter, so it does not claim to resolve the measured cold mesh hitches.

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "kokiri-mcp",
+  "version": "0.1.0",
+  "description": "Observe local Kokiri sessions and operate separately owned disposable game tests.",
+  "author": {"name": "Kokiri contributors"},
+  "homepage": "https://github.com/christianfurr/Kokiri",
+  "repository": "https://github.com/christianfurr/Kokiri",
+  "license": "MIT",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Kokiri Development",
+        "shortDescription": "Local game development tools",
+        "longDescription": "Read bounded session metrics, location and logs, capture a game window, and run separately owned copied-profile tests. Human sessions remain observation-only.",
+        "developerName": "Kokiri contributors",
+        "capabilities": [],
+        "defaultPrompt": "Inspect the current Kokiri session and identify reproducible rendering or performance issues."
+      }
+    }
+  }
+}

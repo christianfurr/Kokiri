@@ -1,0 +1,50 @@
+{
+  "schema": "kokiri-native-catalog-verification/1",
+  "verified_at": "2026-11-15T09:38:07.387457+00:00",
+  "source_sha256": {
+    "engine/third_party/d2r_gfx/gfx/nvn/nvn_mtl.m": "a55590ab92dc5dced32ab8e7d01bbdb5fc49cafafb4d140c9c575bb304ec31c5",
+    "engine/third_party/d2r_gfx/gfx/nvn/kokiri_catalog_runtime.h": "94c5ccdfa0085de33793973f7a44682a5c2042066c5777860b5569fa2c8bab16",
+    "engine/third_party/d2r_gfx/gfx/nvn/kokiri_catalog_metal.inc": "6420f7b78682e1e24c373f896bb7c75bd1e4626f7b4c6e349215b9af399d809e",
+    "engine/third_party/d2r_gfx/gfx/nvn/kokiri_catalog_pso.h": "4bad85cb02a204ee66d129bc129814c7516c00a368d9d174bc295c020d9bf25c",
+    "engine/tests/catalog_runtime.m": "3e4cac9bd245e89e6874eb2cbec9c8f7032e5df181c99c393f18ba185a8f6582",
+    "engine/tests/test_catalog_runtime.py": "227a23ebb6a595b96973bc0ba56bb89dca99ffa6aed73fa838954ce190f1a4fe",
+    "macos/Sources/KokiriCore/CatalogWarmPlan.swift": "4f5870daa767fffb50e44f5a412e9389db9af6195f08be1ef0e28f7b456201be",
+    "macos/Sources/KokiriCore/CatalogClient.swift": "5c52f768f5127f21d63c4a11396237f9686b52018ba58d729fe7df3b28c9a591",
+    "macos/Sources/KokiriCore/CatalogFacade.swift": "18035dcc01eb6d509224ae33baa8a29211e43ff2e7d824ad23bb1990932d8050",
+    "macos/Sources/Kokiri/AppModel.swift": "041846cdf46d8da0c3b322b79a4fbc0af155228282496589d2f14ab729e2bba1",
+    "macos/Tests/KokiriCoreTests/CatalogWarmPlanTests.swift": "718ef5a030e390139530a588215016ebc96688910a5fc9c8247d097cee31aceb"
+  },
+  "checks": {
+    "swift_tests": 20,
+    "new_native_warm_plan_tests": 8,
+    "foundation_production_pso_asan_ubsan_checks": 60,
+    "renderer_syntax_exit": 0,
+    "renderer_existing_warnings": 67,
+    "native_shell_release_build": true,
+    "native_shell_strict_codesign": true,
+    "catalog_python_tests": 22,
+    "native_catalog_client_checks": 32
+  },
+  "native_shell": {
+    "executable_sha256": "e916cb4a9e5272301f04975059f1fbfa27817901547686e2bd90dfb86148df3b",
+    "version": "0.1.0",
+    "build": "1",
+    "source_commit": "bb8c3e424aa820a90781ffda8f95dfe2fbf353f8",
+    "source_dirty": true
+  },
+  "limits": {
+    "retained_recipes": 512,
+    "handoff_bytes": 1048576,
+    "local_shader_proof_bytes_per_layer": 67108864,
+    "shell_variant_memo_entries": 1024
+  },
+  "not_verified": [
+    "actual_game_catalog_adoption",
+    "public_hosting",
+    "production_signing_keys"
+  ],
+  "not_supported": [
+    "mesh_task_pipeline_admission",
+    "precompiled_shader_library_compiler_identity"
+  ]
+}

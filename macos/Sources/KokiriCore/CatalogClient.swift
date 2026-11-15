@@ -17,7 +17,7 @@ public struct CatalogIngestResult: Sendable {
     public let deferred: Int
 }
 
-private enum CatalogWire {
+enum CatalogWire {
     static let version = "kokiri-catalog/1"
     static let contextFields = ["game_id", "game_version", "game_content_sha256", "recipe_format", "backend", "shader_chain", "translator_sha256", "compiler_sha256", "target_sha256", "options_sha256"]
     static let fingerprints = ["game_content_sha256", "translator_sha256", "compiler_sha256", "target_sha256", "options_sha256"]
@@ -221,6 +221,8 @@ public actor CatalogClient {
         CatalogClientStatus(consent: sessionStopped && state.consent == true ? false : state.consent, queued: state.pending.count,
                             reviewedRecords: state.reviewedRecords, configured: endpoint != nil && !trustedKeys.isEmpty, lastError: lastError)
     }
+    /// The native warm-plan verifier uses the same durable anti-rollback floor.
+    public func acceptedRevision(contextID: String) -> Int? { state.revisions[contextID] }
     private func persist(_ next: CatalogState) throws {
         let fm = FileManager.default
         if fm.fileExists(atPath: store.path) {

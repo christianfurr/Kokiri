@@ -23,10 +23,12 @@ Import pinned public OoT source and reviewed fixes, with source-only copies of r
 7. Review, run source/native/service checks, test copied-profile gameplay, publish the independent source repository and a reviewable branch. Do not merge existing upstream PRs.
 8. Add the original Kokiri identity, custom in-game menu, and HUD position/scale/detail controls with real persisted runtime support.
 9. Open the game settings/HUD controls with L3 + R3, preserving the existing keyboard shortcut. Verify the chord and HUD during actual gameplay.
+10. Show an original Kokiri logo startup screen with real phase/progress updates, responsive layout and actual first-frame/warm-up dismissal. Preserve the game's opening and ordinary window controls.
+10. Add a branded startup loading screen using the original Kokiri logo, with honest phase/status reporting and reliable dismissal into the game.
 
 ## Latest steering
 
-The user requested closure of our MacNativeGames PRs. All three open PRs (#2180, #2181, #2206) were closed on 2026-11-15; further development belongs in Kokiri. The independent empty public repository has been created; source has not yet been pushed. Cloudflare CLI authentication is currently absent, so a deployed public catalog is not yet available.
+The user requested closure of our MacNativeGames PRs. All three open PRs (#2180, #2181, #2206) were closed on 2026-11-15; further development belongs in Kokiri. Initial standalone source commit `bb8c3e4` is public and all three CI jobs passed. Cloudflare CLI authentication is currently absent, so a deployed public catalog is not yet available.
 
 ## Verification
 

@@ -158,6 +158,8 @@ static int guarded_memcmp(const void *a, const void *b, size_t n, int *differ, c
 #include "totk_serial_set.h"
 
 static void warm_start(void);
+static int kokiri_catalog_flag_enter(void);
+static void kokiri_catalog_flag_leave(int *guard);
 static void warm_claim(void);
 int mtl_warm_wait(int timeout_ms);
 extern void runtime_warm_progress(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t) __attribute__((weak_import));
@@ -3898,6 +3900,9 @@ static int diag_shader_prefix_csv_matches(const char *key,const char *prefixes) 
 }
 static void dead_stat_print(unsigned long long frame);
 void dm_gfx_set_flag(const char *name, int v) {
+    int catalog_guard __attribute__((cleanup(kokiri_catalog_flag_leave))) = 0;
+    (void)catalog_guard;
+    if (!kokiri_catalog_flag_enter()) return; /* Bracket every early return, including concurrent startup changes. */
     if (!strcmp(name, "arg_epoch")) { (void)arg_epoch_on(); atomic_store(&g_arg_epoch_on, v != 0); MLOG("[flag] arg_epoch = %d", v != 0); return; }
     if (!strcmp(name, "arg_epoch_check")) { (void)arg_epoch_on(); atomic_store(&g_arg_epoch_check, v != 0); MLOG("[flag] arg_epoch_check = %d verified=%llu extra=%llu", v != 0, (unsigned long long)atomic_load(&g_arg_epoch_verified), (unsigned long long)atomic_load(&g_arg_epoch_extra)); return; }
     if (!strcmp(name, "tex_slots")) { (void)tex_slots_on(); atomic_store(&g_tex_slots_on, v != 0); MLOG("[flag] tex_slots = %d", v != 0); return; }
@@ -10990,6 +10995,7 @@ static int warm_available(NSString *key) {
     }
     return have;
 }
+#include "kokiri_catalog_metal.inc"
 /* One shader of the warm-up, without the per-run dictionary (safe on several threads at once). */
 static NvShader *warm_shader_load(NSString *key, int stage) {
     /* A warm list may name a variant this cache does not hold (collected by another session, the cache trimmed): it is
@@ -11222,7 +11228,7 @@ static void warm_plan(NSArray<NSString *> *paths, NSArray<NSString *> *files, NS
     NSMutableSet<NSString *> *rows = [NSMutableSet set];
     *tasks = *shaders = *pipelines = 0;
     for (NSString *path in paths) {
-        NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+        NSString *txt = kokiri_warm_text(path);
         for (NSString *line in [txt componentsSeparatedByString:@"\n"]) {
             if (!line.length || [line hasPrefix:@"#"] || [rows containsObject:line]) continue;
             [rows addObject:line];
@@ -11439,7 +11445,7 @@ static void warm_worker(NSArray<NSString *> *paths, NSArray<NSString *> *files,
         par_write_in_place = 1;
         uint64_t done = 0;
         for (NSString *path in paths) {
-            NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+            NSString *txt = kokiri_warm_text(path);
             if (!txt) { MLOG("【红】预热清单读取失败：%s", path.UTF8String);
                 if (path_index++ == 0) atomic_store(&g_warm_priority_done, 1); continue; }
             NSMutableArray<NSString *> *todo = [NSMutableArray array];
@@ -11582,7 +11588,7 @@ static void warm_light(void) {
 #if TARGET_OS_IPHONE
     const char *e = getenv("TOTK_WARM_LIGHT"); if (e && !atoi(e)) return;
     NSString *path = pso_user_path();
-    NSString *txt = path ? [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] : nil;
+    NSString *txt = path ? kokiri_warm_text(path) : nil;
     if (!txt) return;
     NSArray<NSString *> *lines = [txt componentsSeparatedByString:@"\n"];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
@@ -11665,7 +11671,7 @@ static void warm_fill_archive(NSArray<NSString *> *paths, dispatch_semaphore_t d
         uint64_t t0 = bp_now(); NSMutableSet<NSString *> *seen = [NSMutableSet set];
         NSMutableArray<NSString *> *todo = [NSMutableArray array];
         for (NSString *path in paths) @autoreleasepool {
-            for (NSString *line in [[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] componentsSeparatedByString:@"\n"]) {
+            for (NSString *line in [kokiri_warm_text(path) componentsSeparatedByString:@"\n"]) {
                 if (line.length < 2 || [line characterAtIndex:1] != '\t' || [seen containsObject:line]) continue;
                 unichar t = [line characterAtIndex:0];
                 if (t != 'R' && t != 'C' && t != 'B' && t != 'T' && t != 'M') continue;
@@ -11775,6 +11781,11 @@ int mtl_pipeline_archive_tool(int argc, char **argv) {
 static void warm_start(void) {
     if (g_warm_started++) return;
     warm_filled();
+    NSString *catalog = nil;
+    if (getenv("KOKIRI_CATALOG_IDENTITY_FILE") || getenv("KOKIRI_CATALOG_HANDOFF")) {
+        g_warm_scope = totk_rt_shader_scope();
+        catalog = kokiri_catalog_begin();
+    }
     const char *e = getenv("DM_PSO_MANIFEST");
     if (e && !strcmp(e, "off")) { warm_light(); if (runtime_audio_hold) runtime_audio_hold(0); return; }
     NSArray<NSString *> *paths;
@@ -11807,14 +11818,15 @@ static void warm_start(void) {
         const char *seedMode = getenv("TOTK_SHADER_SEED");
         NSString *prepared = [dir stringByAppendingPathComponent:@"shader-seed/pso_manifest.tsv"];
         if (!(seedMode && !strcmp(seedMode, "off")) && [fm fileExistsAtPath:prepared]) { [all addObject:prepared]; [shipped addObject:prepared]; }
+        if (catalog) { [all addObject:catalog]; [shipped addObject:catalog]; }
         paths = all;
         NSMutableString *desc = [NSMutableString string];
-        for (NSString *p in paths) { NSString *t = [NSString stringWithContentsOfFile:p encoding:NSUTF8StringEncoding error:nil];
+        for (NSString *p in paths) { NSString *t = kokiri_warm_text(p);
             [desc appendFormat:@"%@%@ %lu 行", desc.length ? @"，" : @"", p.lastPathComponent, (unsigned long)[t componentsSeparatedByString:@"\n"].count - 1]; }
         MLOG("预热清单（自动着色器收集）：%s；另加翻译缓存里本版本游戏的着色器", desc.UTF8String);
     }
     if (!g_warm_items) g_warm_items = [NSMutableArray array];
-    g_warm_scope = totk_rt_shader_scope();
+    if (!g_warm_scope) g_warm_scope = totk_rt_shader_scope();
     NSArray<NSString *> *cached = totk_rt_list();
     par_open_dir(g_dev);   // the pipeline archive: with files, the pipeline lists are made from them and the rest when drawn
     /* With a valid pipeline archive the pipeline lists are still warmed (the title's, the shared list's, this device's):

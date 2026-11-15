@@ -18,5 +18,7 @@
 	<integer>1</integer>
 	<key>KokiriLiveStatusVersion</key>
 	<integer>1</integer>
+	<key>KokiriCatalogWarmVersion</key>
+	<integer>1</integer>
 </dict>
 </plist>
