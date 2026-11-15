@@ -41,6 +41,9 @@ test('bundled CLI starts under file permissions, closes gracefully, snapshots an
     } catch { await new Promise(r => setTimeout(r, 20)); }
   }
   assert(ready);
+  const homepage = await fetch(`http://127.0.0.1:${port}/`);
+  assert.equal(homepage.status, 200);
+  assert.match(await homepage.text(), /<title>Kokiri Shader Catalog<\/title>/);
   const off = await fetch(`http://127.0.0.1:${port}/v1/contributions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   assert.equal(off.status, 503);
   child.kill('SIGTERM'); assert.equal(await done, 0);

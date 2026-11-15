@@ -5,6 +5,19 @@ implements the server's narrow D1 operations with one atomic SQLite transaction
 per batch. There is no web SQL/admin/publication endpoint and no signing key.
 The service shares metadata only; no game files, shaders, caches or saves.
 
+The root GET route serves a static catalog homepage with the current private
+preview status and a link to `/v1/protocol`. It uses a stylesheet-hash CSP and
+loads no scripts, fonts, trackers, or remote assets. The homepage's paused
+contribution status matches the installed default-off ingestion configuration;
+review its copy before opening community ingestion.
+
+For a public homepage with a private API, the planned tunnel exposes only the
+exact root path `^/$` without authentication. The `/v1` Access application must
+protect API children, and the first tunnel rule `^/v1(/.*)?$` must require the
+application's exact Access audience. Everything else returns 404. Enable URL
+normalization and verify encoded/normalized path variants before publishing DNS.
+The Node listener remains local; Access is enforced at the reviewed proxy route.
+
 ## Protections
 
 | Boundary | Enforced value |
@@ -19,7 +32,7 @@ The service shares metadata only; no game files, shaders, caches or saves.
 | Free filesystem reserve | 512 MiB; backup also reserves snapshot space |
 | Database acknowledgments | Only after transactional commit; duplicates idempotent |
 | Incoming records | Strict existing metadata schema; quarantine only |
-| GET routes | Curated immutable packs and signed manifests only |
+| GET routes | Static homepage, protocol, curated immutable packs and signed manifests |
 | Backup retention | Seven verified snapshots plus SHA-256 sidecars |
 | Unit limits | 256 MiB memory, no swap, one logical CPU, 32 tasks, 128 FDs |
 

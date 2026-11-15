@@ -37,6 +37,29 @@ function raw(port, payload) {
   });
 }
 
+test('homepage is static, restricted by CSP, and preserves private service defaults', async t => {
+  const s = await setup(t, { ingest: false });
+  for (const path of ['/', '/?source=link']) {
+    const response = await fetch(s.origin + path);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /^text\/html; charset=utf-8$/);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.match(response.headers.get('content-security-policy'), /default-src 'none'; style-src 'sha256-/);
+    assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+    assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+    const html = await response.text();
+    assert.match(html, /<title>Kokiri Shader Catalog<\/title>/);
+    assert.match(html, /href="\/v1\/protocol"/);
+    assert.match(html, /Private preview/);
+    assert.doesNotMatch(html, /<script\b|<form\b|<iframe\b/i);
+  }
+  assert.equal(s.address.address, '127.0.0.1');
+  assert.equal((await fetch(s.origin + '/v1/protocol')).status, 200);
+  assert.equal((await s.post(contribution)).status, 503);
+  assert.equal(s.database.db.prepare('SELECT records FROM catalog_usage').get().records, 0);
+  assert.equal((await fetch(s.origin + '/not-a-page')).status, 404);
+});
+
 test('loopback service validates and durably deduplicates concurrent metadata', async t => {
   const s = await setup(t);
   assert.equal(s.address.address, '127.0.0.1');

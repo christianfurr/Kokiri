@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import worker from '../src/worker.ts';
 import { CatalogDatabase } from './database.mjs';
 import { readTrustedKeys, verifyPublished } from './published.mjs';
+import { HOME_HEADERS, HOME_HTML } from './homepage.mjs';
 
 const LOOPBACK = '127.0.0.1';
 export const HOST_LIMITS = Object.freeze({ bodyBytes: 65536, inflight: 8, connections: 32, requestsPerMinute: 300, postsPerMinute: 60, bodyTimeoutMs: 5000 });
@@ -65,6 +66,11 @@ export function createCatalogServer({ database, ingest = false, limits = HOST_LI
         headers: { 'Content-Type': req.headers['content-type'] ?? '' },
         ...(req.method === 'POST' ? { body: Buffer.concat(chunks) } : {}),
       });
+      if (request.method === 'GET' && new URL(request.url).pathname === '/') {
+        res.writeHead(200, HOME_HEADERS);
+        res.end(HOME_HTML);
+        return;
+      }
       const response = await worker.fetch(request, { DB: database });
       res.writeHead(response.status, Object.fromEntries(response.headers));
       res.end(Buffer.from(await response.arrayBuffer()));
