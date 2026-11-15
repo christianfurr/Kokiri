@@ -246,6 +246,33 @@ class SeedTests(unittest.TestCase):
             self.assertEqual((out/(verified+'_b.metal')).stat().st_ino, inode)
             self.assertEqual(json.loads((out/'seed-manifest.json').read_text())['runtime_sha256'], '9'*64)
 
+    def test_unchanged_publication_rechecks_expected_cache_hashes_before_return(self):
+        for changed in ('metal', 'index'):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                cache, key, verified, _, metadata = self.publication_fixture(root)
+                entries = json.loads((cache/(key+'.variants')).read_text())
+                (cache/(key+'.variants')).write_text(json.dumps(entries[:1]))
+                outputs, _ = seed.verified_batch_outputs(cache, {verified}, {key}, 1)
+                expected = seed.parallel_sha256(list(outputs.values()), 1)
+                out = root/'published'
+                seed.publish_seed(out, cache, {verified}, {key: {'stage': 4}}, metadata,
+                                  started_at=time.time(), jobs=1, expected_output_sha256=expected)
+                (out/'prior-seed-sentinel').write_bytes(b'preserve prior seed')
+                if changed == 'metal':
+                    (cache/(verified+'_b.metal')).write_text('in-place change after reconciliation')
+                else:
+                    entries[0]['request'] = '0'*64
+                    (cache/(key+'.variants')).write_text(json.dumps(entries[:1]))
+                before = {path:path.read_bytes() for path in cache.iterdir() if path.is_file()}
+                with mock.patch.object(seed.shutil, 'rmtree') as remove, mock.patch.object(Path, 'rename') as rename:
+                    with self.assertRaisesRegex(ValueError, 'changed after reconciliation'):
+                        seed.publish_seed(out, cache, {verified}, {key: {'stage': 4}}, metadata,
+                                          started_at=time.time(), jobs=1, expected_output_sha256=expected)
+                    remove.assert_not_called(); rename.assert_not_called()
+                self.assertEqual((out/'prior-seed-sentinel').read_bytes(), b'preserve prior seed')
+                for path, contents in before.items(): self.assertEqual(path.read_bytes(), contents)
+
     def corpus(self, path, count=4):
         records = []
         for number in range(count):

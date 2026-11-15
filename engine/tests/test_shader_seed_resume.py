@@ -40,6 +40,12 @@ class ResumeFixture:
         self.cache.mkdir(parents=True)
         self.service = self.cache/'tool/build/shader-service/totk_xlate'
         self.service.parent.mkdir(parents=True); self.service.write_bytes(self.translator.read_bytes())
+        self.helpers = {}
+        for name in ('finite_cold_batches.py', 'bounded_batch_probe.py'):
+            path = root/'historical'/name
+            path.parent.mkdir(exist_ok=True)
+            path.write_text('historical approved helper: '+name)
+            self.helpers[name] = path
         self.identity = dict(chain=seed.CHAIN, version='oot', source_romfs_sha256='1'*64,
                              corpus_sha256=seed.sha256(self.corpus), shader_list_sha256=seed.sha256(self.shared),
                              runtime_sha256=seed.sha256(self.runtime), translator_sha256=seed.sha256(self.translator),
@@ -61,12 +67,13 @@ class ResumeFixture:
             window_dir.mkdir(parents=True)
             proof_path, receipt_path = window_dir/'proof.json', window_dir/'receipt.json'
             grant = dict(owner_thread_id='01a1e00c-e2ee-7dd3-bdcf-31eef3625144', state='granted',
-                         grant_id=f'fixture-{number}', lease_content_sha256='a'*64)
+                         grant_id=f'fixture-{number}', lease_content_sha256='a'*64,
+                         script_sha256={name:seed.sha256(path) for name, path in self.helpers.items()})
             proof = dict(schema='kokiri-finite-source-proof-v1', grant_id=grant['grant_id'], lease_content_sha256='a'*64,
                          selected_batches=[number], source_corpus=dict(sha256=self.identity['corpus_sha256']),
                          producer_progress_path=str(self.producer), producer_progress_sha256=seed.sha256(self.producer),
                          inputs={str(path.resolve()):dict(sha256=seed.sha256(path)) for path in
-                                 (self.shared, self.runtime, self.service)},
+                                 (self.shared, self.runtime, self.service, *self.helpers.values())},
                          batch_plans=[dict(batch_number=number, batch_path=chunk['corpus'], list_path=chunk['list'],
                             batch_sha256=chunk['corpus_sha256'], list_sha256=chunk['list_sha256'], keys=sorted(chunk['keys']),
                             defaults_requested=len(chunk['keys']), binding_requests=chunk['listed_requests'],
@@ -95,6 +102,7 @@ class ResumeFixture:
             completion['output_sha256'] = seed.parallel_sha256(list(outputs.values()), 1)
             child_path = attempt/'receipt.json'
             child = dict(schema='kokiri-bounded-shader-batch-v2', status='batch-complete-only', returncode=0,
+                         script_sha256=grant['script_sha256']['bounded_batch_probe.py'], grant=copy.deepcopy(grant),
                          remaining_native_group=[], batch_number=number, source_proof_path=str(proof_path),
                          source_proof_sha256=seed.sha256(proof_path), batch_sha256=chunk['corpus_sha256'],
                          list_sha256=chunk['list_sha256'], completion=completion,
@@ -213,6 +221,36 @@ class ResumeTests(unittest.TestCase):
                 else: completion.pop('verified_sha256')
                 fixture.refresh()
                 with self.assertRaisesRegex(ValueError, 'hash differs|incomplete historical'):
+                    fixture.reconcile()
+
+    def test_cleanup_absence_or_unknown_state_cannot_stand_for_explicit_empty(self):
+        for target, field in (('window', 'remaining_supervisor_group'), ('child', 'remaining_native_group')):
+            for state in ('missing', None, False):
+                with self.subTest(target=target, state=state), tempfile.TemporaryDirectory() as folder:
+                    fixture = ResumeFixture(Path(folder))
+                    receipt = fixture.window_values[0][1] if target == 'window' else fixture.child_values[0][1]
+                    if state == 'missing': receipt.pop(field)
+                    else: receipt[field] = state
+                    fixture.refresh()
+                    with self.assertRaisesRegex(ValueError, 'clean descendants|failed, unknown'):
+                        fixture.reconcile()
+
+    def test_historical_helper_pins_must_agree_without_requalifying_current_source(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fixture = ResumeFixture(Path(folder))
+            fixture.helpers['bounded_batch_probe.py'].write_text('current helper changed after measured run')
+            self.assertEqual(fixture.reconcile()['totals']['translated_default'], 2)
+        for mismatch in ('child', 'proof', 'grant', 'parent-grant'):
+            with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as folder:
+                fixture = ResumeFixture(Path(folder))
+                if mismatch == 'child': fixture.child_values[0][1]['script_sha256'] = '0'*64
+                elif mismatch == 'proof':
+                    fixture.proof_values[0][1]['inputs'][str(fixture.helpers['bounded_batch_probe.py'].resolve())]['sha256'] = '0'*64
+                else:
+                    name = 'bounded_batch_probe.py' if mismatch == 'grant' else 'finite_cold_batches.py'
+                    fixture.window_values[0][1]['grant']['script_sha256'][name] = '0'*64
+                fixture.refresh()
+                with self.assertRaisesRegex(ValueError, 'historical helper|historical child'):
                     fixture.reconcile()
 
     def test_stale_runtime_context_index_output_binding_and_log_are_rejected(self):

@@ -453,6 +453,10 @@ def publish_seed(out, cache, verified, inventory, metadata, *, started_at, shade
     if set(keys) != set(inventory) or {name[:-len('_b.metal')] for name in files if name.endswith('_b.metal')} != set(verified):
         raise ValueError('verified seed variants are missing cached outputs or differ from the corpus')
     if not indexes and seed_unchanged(out, files, inputs, report.get('runtime_sha256')):
+        if expected_output_sha256 is not None:
+            for name, source in files.items():
+                if sha256(source) != expected_output_sha256[name]:
+                    raise ValueError('seed publication cached output changed after reconciliation: '+name)
         print(f'seed unchanged: its {len(files)} translation files are the ones published, from the same inputs; '
               'kept as it is (no new links, digests or manifest)', flush=True)
         return None

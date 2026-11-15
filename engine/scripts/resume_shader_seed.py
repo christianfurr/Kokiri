@@ -115,7 +115,7 @@ def reconcile_plan(plan_path, *, expected_identity, corpus, shader_list, cache, 
         window, window_sha = read(window_path, reference['receipt_sha256'], json_value=True)
         if (window.get('schema') != 'kokiri-finite-shader-window-v2' or window.get('status') != 'finite-window-complete-only' or
             window.get('stop_reason') or window.get('error') or window.get('cleanup_error') or
-            window.get('remaining_supervisor_group') or window.get('jobs') != 1 or
+            window.get('remaining_supervisor_group', UNPINNED) != [] or window.get('jobs') != 1 or
             window.get('maximum_known_requests') != 4000 or window.get('maximum_seconds') != 300 or
             window.get('full_seed_published') is not False or window.get('prepared') is not False):
             raise ValueError('resume accepts only successful finite-window evidence with clean descendants')
@@ -128,6 +128,20 @@ def reconcile_plan(plan_path, *, expected_identity, corpus, shader_list, cache, 
             grant.get('state') != 'granted' or proof.get('grant_id') != grant.get('grant_id') or
             proof.get('lease_content_sha256') != grant.get('lease_content_sha256')):
             raise ValueError('resume finite window lacks its granted proof identity')
+        helper_pins = {}
+        for name in ('finite_cold_batches.py', 'bounded_batch_probe.py'):
+            matching_inputs = [(path, item) for path, item in proof.get('inputs', {}).items() if Path(path).name == name]
+            if len(matching_inputs) != 1:
+                raise ValueError('resume source proof lacks a unique historical helper identity')
+            path, item = matching_inputs[0]
+            digest = item.get('sha256')
+            if (not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest) or
+                grant.get('script_sha256', {}).get(name) != digest):
+                raise ValueError('resume historical helper differs from its granted source proof')
+            helper_pins[name] = digest
+            protected.append(Path(path))
+        if 'script_sha256' in window and window['script_sha256'] != helper_pins['finite_cold_batches.py']:
+            raise ValueError('resume historical parent helper identity differs')
         producer, producer_sha = read(proof['producer_progress_path'], proof['producer_progress_sha256'], json_value=True)
         for field in ('corpus_sha256', 'runtime_sha256', 'translator_sha256', 'translation_context_sha256'):
             if producer.get(field) != expected[field]:
@@ -173,9 +187,15 @@ def reconcile_plan(plan_path, *, expected_identity, corpus, shader_list, cache, 
                 raise ValueError('resume immutable partition plan differs from its source proof')
             if (child.get('schema') != 'kokiri-bounded-shader-batch-v2' or child.get('status') != 'batch-complete-only' or
                 child.get('returncode') != 0 or child.get('stop_reason') or child.get('error') or child.get('cleanup_error') or
-                child.get('remaining_native_group') or child.get('batch_number') != number or
+                child.get('remaining_native_group', UNPINNED) != [] or child.get('batch_number') != number or
                 child.get('source_proof_sha256') != proof_sha or Path(child['source_proof_path']).resolve() != Path(window['source_proof_path']).resolve()):
                 raise ValueError('resume child is failed, unknown, incomplete or belongs to another proof')
+            child_grant = child.get('grant', {})
+            if (child.get('script_sha256') != helper_pins['bounded_batch_probe.py'] or
+                child_grant.get('grant_id') != grant.get('grant_id') or
+                child_grant.get('lease_content_sha256') != proof.get('lease_content_sha256') or
+                child_grant.get('script_sha256', {}).get('bounded_batch_probe.py') != helper_pins['bounded_batch_probe.py']):
+                raise ValueError('resume historical child helper identity differs from its proof and grant')
             if child.get('batch_sha256') != descriptor['corpus_sha256'] or child.get('batch_list_sha256', child.get('list_sha256')) != descriptor['list_sha256']:
                 raise ValueError('resume child checked another immutable partition')
             env, command = child.get('effective_env', {}), child.get('command', [])
