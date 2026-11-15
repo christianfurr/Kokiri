@@ -3619,6 +3619,19 @@ static uint64_t g_stor_entries, g_stor_shared, g_stor_viewed, g_stor_recreated, 
    registry lock requests a pass split; the caller ends the pass outside that lock and retries. */
 static int g_tex_preparing, g_tex_prepare_split;
 #define STOR_IDLE_SUBMITS 600
+/* g_smu: a lower bound for the next idle retirement. Reacquiring or deleting
+   an entry can leave an earlier bound, which only causes an extra scan. */
+static uint64_t g_stor_sweep_next = UINT64_MAX;
+static uint64_t stor_idle_deadline(const stor_ent *e) {
+    uint64_t cutoff = e->idle_fence + STOR_IDLE_SUBMITS;
+    return cutoff == UINT64_MAX ? UINT64_MAX : cutoff + 1;
+}
+static void stor_schedule_idle_locked(const stor_ent *e) {
+    if (!e->nser) {
+        uint64_t deadline = stor_idle_deadline(e);
+        if (deadline < g_stor_sweep_next) g_stor_sweep_next = deadline;
+    }
+}
 static int stor_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("TOTK_TEX_SHARE"); on = !e || atoi(e); } return on; }
 static int stor_key_of(const tex_t *t, stor_key *k) {
     if (!t->mem || !t->L.size) return 0;
@@ -3641,7 +3654,7 @@ static void stor_ref_locked(id o, uint64_t serial) {
 static int stor_unref_locked(id o, uint64_t serial) {
     uint64_t ok = obj_key(o); stor_ent *e = nvn_hm_get(&g_stor_of_obj, &ok); if (!e) return 0;
     for (int i = 0; i < e->nser; i++) if (e->ser[i] == serial) { e->ser[i] = e->ser[--e->nser]; break; }
-    if (!e->nser) e->idle_fence = g_fence;
+    if (!e->nser) { e->idle_fence = g_fence; stor_schedule_idle_locked(e); }
     if ((__bridge void *)o != e->tex) nvn_hm_del(&g_stor_of_obj, &ok);
     return 1;
 }
@@ -4627,7 +4640,8 @@ static void stor_release_holders_locked(stor_ent *e, const char *why) {
         serial_resource_ref(o,-1); defer_obj_unref(o); hm_del_id(&g_by_serial, &s); ser_bump_locked(s); BOTW_SERIAL_NOTE(s, "storage entry dropped")
     }
     descriptor_profile_storage(why,e,e->k.mem,e->k.size,e->k.w,e->k.h,e->k.d,e->k.levels,e->k.target,e->tex,e->ser,e->nser,removed,atomic_load_explicit(&g_ser_gen,memory_order_relaxed));
-    e->nser = 0; if(!pool_incremental())ser_bump_locked(0); atomic_fetch_add_explicit(&g_storage_revision,1,memory_order_release);
+    e->nser = 0; stor_schedule_idle_locked(e);
+    if(!pool_incremental())ser_bump_locked(0); atomic_fetch_add_explicit(&g_storage_revision,1,memory_order_release);
 }
 static void stor_drop_locked(stor_ent *e) {
     stor_release_holders_locked(e,"drop");
@@ -4771,6 +4785,7 @@ static void stor_publish(const tex_t *t, id<MTLTexture> mt) {
                      k.w, k.h, k.d, k.levels, k.target, k.samples, k.bpb, k.depth_fmt, o->k.w, o->k.h, o->k.d, o->k.levels, o->k.target, o->k.samples, o->k.bpb, o->k.depth_fmt, t->d.format); break; } }
         stor_ent *e = calloc(1, sizeof *e); if (!e) MDIE("storage entry");
         e->k = k; e->tex = (void *)CFBridgingRetain(mt); e->idle_fence = g_fence;
+        stor_schedule_idle_locked(e);
         nvn_hm_put(&g_by_storage, &e->k, e); uint64_t ok = obj_key(mt); nvn_hm_put(&g_stor_of_obj, &ok, e); g_stor_entries++;
     }
     pthread_mutex_unlock(&g_smu);
@@ -4789,8 +4804,39 @@ static void stor_collect_drop(int (^pick)(const stor_ent *), uint64_t *counter) 
     free(gone);
 }
 static void stor_sweep(uint64_t fence) {
-    stor_collect_drop(^int(const stor_ent *e) { return !e->nser && fence > e->idle_fence + STOR_IDLE_SUBMITS; }, &g_stor_swept);
-    stor_det_sweep(^int(const stor_ent *e) { return !e->nser && fence > e->idle_fence + STOR_IDLE_SUBMITS; }, &g_stor_swept);
+    pthread_mutex_lock(&g_smu);
+    if (fence < g_stor_sweep_next) { pthread_mutex_unlock(&g_smu); return; }
+    uint64_t next = UINT64_MAX;
+    stor_ent **gone = NULL; int n = 0, cap = 0;
+    /* Collect before deleting: hashmap deletion shifts later entries. The
+       original holder/age predicate and deferred GPU retirement stay intact. */
+    for (uint32_t i = 0; i < g_by_storage.cap; i++) {
+        stor_ent *e = g_by_storage.vals[i];
+        if (!e || e->nser) continue;
+        if (fence > e->idle_fence + STOR_IDLE_SUBMITS) {
+            if (n == cap) { cap = cap ? cap * 2 : 16; gone = realloc(gone, (size_t)cap * sizeof *gone); if (!gone) MDIE("storage sweep"); }
+            gone[n++] = e;
+        } else {
+            uint64_t deadline = stor_idle_deadline(e);
+            if (deadline < next) next = deadline;
+        }
+    }
+    for (int i = 0; i < n; i++) stor_drop_locked(gone[i]);
+    g_stor_swept += (uint64_t)n;
+    for (int i = 0; i < g_stor_ndet; ) {
+        stor_ent *e = g_stor_det[i];
+        if (!e->nser && fence > e->idle_fence + STOR_IDLE_SUBMITS) {
+            g_stor_det[i] = g_stor_det[--g_stor_ndet]; stor_det_drop_locked(e); g_stor_swept++;
+        } else {
+            if (!e->nser) { uint64_t deadline = stor_idle_deadline(e); if (deadline < next) next = deadline; }
+            i++;
+        }
+    }
+    /* Drops may schedule a redundant bound; all survivors were inspected under
+       this same lock, so their minimum replaces it without losing an update. */
+    g_stor_sweep_next = next;
+    pthread_mutex_unlock(&g_smu);
+    free(gone);
 }
 /* Opt-in exact ownership inventory for GPU memory failures. A memory total
    cannot distinguish live guest storage from the no-holder retention window.
