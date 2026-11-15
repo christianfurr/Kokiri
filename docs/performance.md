@@ -26,6 +26,9 @@ This is one repeated warm route, without a matched default-budget control soak. 
 
 ## Method for new results
 
+See [runtime validation](runtime-validation.md) for the strict actual-presentation
+analyzer, timing-counter alignment and matched walking/transition acceptance.
+
 1. Record source, executable and shader-chain fingerprints, hardware and power state.
 2. Use a disposable copy of the latest profile, a fixed route and the same warm population. Preserve the real profile before and after.
 3. Include walking, camera turns, transitions and repeated revisits. Separate static allocation holds from FPS measurements.
