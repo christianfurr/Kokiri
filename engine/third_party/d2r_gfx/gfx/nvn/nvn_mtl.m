@@ -10503,7 +10503,7 @@ static int frmw_use_lowered(NvShader *cs) {
     if (!frmw_has_device_float_rmw(msl.UTF8String)) return 0;
     int n = 0; char *lowered = frmw_lower(msl.UTF8String, &n);
     if (!lowered) { MLOG("[RED] compute shader %s: its float adds are not in the form nvn_float_rmw.h lowers (#2070)", cs->key); return 0; }
-    NSError *e = nil; id<MTLLibrary> lib = totk_msl_library(@(lowered), &e); free(lowered);
+    NSError *e = nil; id<MTLLibrary> lib = variant_library_build(@(lowered), &e); free(lowered);
     id<MTLFunction> fn = lib ? [lib newFunctionWithName:cs->fn.name] : nil;
     if (!fn) { MLOG("[RED] compute shader %s: the lowered float adds do not compile: %s", cs->key, e.localizedDescription.UTF8String); return 0; }
     fn.label = cs->fn.label; cs->fn = fn; cs->frmw = 1;
