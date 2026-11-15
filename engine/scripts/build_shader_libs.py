@@ -22,7 +22,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from metal_toolchain import METAL_FLAGS as BASE_METAL_FLAGS, metal_compiler   # noqa: E402
+from metal_toolchain import METAL_FLAGS as BASE_METAL_FLAGS, metal_compiler, compiler_observation, compiler_context_key   # noqa: E402
 from prepare_shader_seed import CHAIN   # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'dev'))
 from game_slot import GameSlot
@@ -129,6 +129,7 @@ def main():
     if not found:
         sys.exit('[RED] no Metal compiler (Xcode -> Settings -> Components: Metal Toolchain)')
     metal, compiler, env = found
+    observation=compiler_observation(metal,compiler,env,METAL_FLAGS)
     source_files = {}
     for cache in a.cache:
         for src in sorted(cache.glob('*_b.metal')):
@@ -144,7 +145,8 @@ def main():
     sources = list(source_files.values())
     if not sources:
         sys.exit(f'[RED] {a.cache}: no translated shaders (*_b.metal)')
-    identity = ' '.join([compiler, *METAL_FLAGS])
+    context_key = compiler_context_key(observation)
+    identity = ' '.join([compiler, *METAL_FLAGS, 'context-sha256='+context_key])
     stamp = a.out/'compiler.txt'
     if stamp.is_file() and stamp.read_text() != identity:
         a.out.rename(a.out.with_name(a.out.name + '.previous-' + str(os.getpid())))
@@ -152,7 +154,8 @@ def main():
     stamp.write_text(identity)
     manifest = a.out/'libraries-manifest.json'
     prior = json.loads(manifest.read_text()) if manifest.exists() else {}
-    known = prior.get('files', {}) if prior.get('compiler') == identity else {}
+    known = prior.get('files', {}) if (prior.get('compiler') == identity and
+                                      prior.get('compiler_context_sha256') == context_key) else {}
     parser_depths = dict(prior.get('parser_depths', {})) if known else {}
     todo, source_hashes = {}, {}
     # A source the seed recorded as checked (prepare_ns2_seed.py record_verified) keeps that digest; the rest, and every
@@ -213,6 +216,14 @@ def main():
         return digest, parser_depth, None
 
     failed, done = [], 0
+    progress_files={sha+'.metallib':known[sha+'.metallib'] for sha,ok in lib_states.items() if ok}
+    def checkpoint():
+        report=dict(schema=1,compiler=identity,complete=False,subset=bool(a.only),sources=source_hashes,
+                    files=progress_files,parser_depths=parser_depths,compiler_observation=observation,
+                    compiler_context_sha256=context_key,
+                    variant_caches=variant_caches,preparation_sha256=digest(Path(__file__).resolve()))
+        partial=manifest.with_suffix('.partial');partial.write_text(json.dumps(report,indent=2)+'\n');partial.replace(manifest)
+    checkpoint()
     os.environ.setdefault('TOTK_GAME_SLOT_DIR', str(Path.home() / 'Library/Application Support/MacNativeGames/TOTK/game-slot'))
     with GameSlot(owner='build', purpose='OOT offline Metal libraries', expect_seconds=1800):
         with concurrent.futures.ThreadPoolExecutor(a.jobs) as pool:
@@ -222,7 +233,10 @@ def main():
                     parser_depths[source_hash + '.metallib'] = parser_depth
                 if f:
                     failed.append(f)
+                else:
+                    progress_files[source_hash+'.metallib']=digest(a.out/(source_hash+'.metallib'))
                 if done % 250 == 0:
+                    checkpoint()
                     print(f'  {done} / {len(todo)}', flush=True)
     log = a.out/'failed.log'
     log.write_text('\n'.join(failed))
@@ -240,6 +254,8 @@ def main():
         if library.is_file() and digest(library) == expected:
             files[name] = expected
     report = dict(schema=1, compiler=identity, complete=not failed, subset=bool(a.only), sources=source_hashes, files=files,
+                  compiler_observation=observation,
+                  compiler_context_sha256=context_key,
                   variant_caches=variant_caches,
                   parser_depths={k: v for k, v in parser_depths.items() if k in files},
                   preparation_sha256=digest(Path(__file__).resolve()))
