@@ -260,7 +260,13 @@ def selftest(output):
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True,type=Path)
     args=parser.parse_args()
+    def deadline(_signal, _frame):
+        raise TimeoutError('Diagnostic test exceeded its 60-second overall bound')
+    signal.signal(signal.SIGALRM, deadline)
+    signal.alarm(60)
     try:
         print(json.dumps(selftest(args.output),sort_keys=True))
     except Exception as error:
         parser.exit(1,'Diagnostic update test failed: '+str(error)+'\n')
+    finally:
+        signal.alarm(0)
