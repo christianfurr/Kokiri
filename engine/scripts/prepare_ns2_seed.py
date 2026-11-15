@@ -366,6 +366,95 @@ def atomic_json(path, report):
     partial.replace(path)
 
 
+def verified_batch_outputs(cache, verified, keys, jobs=2):
+    """Check that every request-verified variant has complete same-chain outputs."""
+    outputs, indexes = seed_files(cache, verified, jobs, keys)
+    if {name[:-len('.variants')] for name in outputs if name.endswith('.variants')} != set(keys):
+        raise ValueError('verified batch cache outputs are incomplete')
+    if {name[:-len('_b.metal')] for name in outputs if name.endswith('_b.metal')} != set(verified):
+        raise ValueError('verified batch variants are missing cached outputs')
+    return outputs, indexes
+
+
+def publish_seed(out, cache, verified, inventory, metadata, *, started_at, shader_list=None,
+                 scope_keys=None, logs=None, jobs=2):
+    """Publish already request-verified outputs with the existing seed format.
+
+    The caller supplies context/completion metadata after native verification.
+    This does not infer request validity from cached files. It rechecks context
+    consistency, complete output coverage and reflection identities before the
+    existing staging/rename publisher can replace a seed. Returns its manifest,
+    or None when the prior published seed is already unchanged.
+    """
+    out, cache = Path(out), Path(cache)
+    report = dict(metadata)
+    inputs = report['inputs']
+    context_fields = ('chain', 'version', 'source_romfs_sha256', 'translation_context_sha256',
+                      'nvn_depth_mode', 'translator_sha256', 'shader_list_sha256', 'corpus_sha256')
+    if report.get('chain') != CHAIN or any(report.get(key) != inputs.get(key) for key in context_fields):
+        raise ValueError('seed publication context differs from its verified inputs')
+    if (any(type(report.get(field)) is not int or report[field] < 0 for field in
+            ('corpus_shaders', 'translated_default', 'listed_variants', 'listed_asked')) or
+        report.get('corpus_shaders') != len(inventory) or report.get('translated_default') != len(inventory) or
+        report.get('listed_variants') != report.get('listed_asked')):
+        raise ValueError('seed publication lacks complete verified request counts')
+    files, indexes = seed_files(cache, verified, jobs)
+    keys = sorted(name[:-len('.variants')] for name in files if name.endswith('.variants'))
+    missing = {key: inventory[key] for key in sorted(inventory.keys() - set(keys))}
+    if logs is not None:
+        logs = Path(logs)
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs/f'ns2-seed-{report["version"]}-missing.json').write_text(json.dumps(missing, indent=2)+'\n')
+    if missing:
+        raise ValueError('verified full seed has missing cached shader keys')
+    if set(keys) != set(inventory) or {name[:-len('_b.metal')] for name in files if name.endswith('_b.metal')} != set(verified):
+        raise ValueError('verified seed variants are missing cached outputs or differ from the corpus')
+    if not indexes and seed_unchanged(out, files, inputs):
+        print(f'seed unchanged: its {len(files)} translation files are the ones published, from the same inputs; '
+              'kept as it is (no new links, digests or manifest)', flush=True)
+        return None
+    staging = out.with_name(out.name+'.partial')
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True)
+    for name, source in files.items():
+        if name in indexes:
+            (staging/name).write_text(json.dumps(indexes[name], sort_keys=True, separators=(',', ':'), ensure_ascii=False))
+        else:
+            os.link(source, staging/name) if source.stat().st_dev == staging.stat().st_dev else shutil.copy2(source, staging/name)
+    scope = shader_key_scope(scope_keys if scope_keys is not None else keys, report['version'], report['source_romfs_sha256'])
+    (staging/'shader-keys.json').write_text(json.dumps(scope, separators=(',', ':'))+'\n')
+    if shader_list:
+        from shader_list import ShaderList, EXPORT, list_name
+        lst = ShaderList.load(shader_list)
+        title, counts_t = lst.resolve(staging, 't')
+        rest, counts_m = lst.resolve(staging, 'm', given=title)
+        for name, rows, counts in (('pso_title.tsv', title, counts_t), ('pso_manifest.tsv', rest, counts_m)):
+            (staging/name).write_text(EXPORT.format(list_name(shader_list))+''.join('\t'.join(row)+'\n' for row in rows))
+            print(f'{name}: {len(rows)} warm rows; left out {counts["other"]} of other versions, {counts["missing"]} the seed cannot build, '
+                  f'{counts["renamed"]} renamed to the seed\'s variants', flush=True)
+    else:
+        (staging/'pso_manifest.tsv').write_text('# NS2 startup shaders; render pipelines come from the shared list.\n')
+    report.update(shaders=sum(name.endswith('_b.metal') for name in files), seconds=round(time.time()-started_at, 1))
+    report['files'], read = publish_digests(sorted(staging.iterdir()), out, lambda paths: parallel_sha256(paths, jobs))
+    print(f'seed files: {len(report["files"])}, {read} read again (the rest kept the digest of the last seed)', flush=True)
+    (staging/'seed-manifest.json').write_text(json.dumps(report, indent=2)+'\n')
+    old = out.with_name(f'.{out.name}.old-{os.getpid()}-{time.time_ns()}')
+    if out.exists():
+        out.rename(old)
+    try:
+        staging.rename(out)
+    except OSError:
+        if old.exists():
+            old.rename(out)
+        raise
+    if old.exists():
+        subprocess.Popen(['/bin/rm', '-rf', str(old)], start_new_session=True)
+    record_verified(out, report['files'])
+    print(json.dumps({key: report[key] for key in ('version', 'shaders', 'corpus_shaders', 'translated_default',
+                                                  'listed_variants', 'listed_asked', 'seconds')}))
+    return report
+
+
 def only_keys(path):
     """The 64-hex shader keys of an --only file, one per line."""
     keys = {line.strip() for line in Path(path).read_text().splitlines() if line.strip()}
@@ -494,11 +583,7 @@ def main():
                                           expected_listed_requests=batch['listed_requests'])
                 if report['corpus_shaders']+report['listed_asked'] > batch['known_requests']:
                     raise ValueError('native batch requested more than the planned bound')
-                outputs, _ = seed_files(cache, checked, a.jobs, batch['keys'])
-                if {name[:-len('.variants')] for name in outputs if name.endswith('.variants')} != set(batch['keys']):
-                    raise ValueError('verified batch cache outputs are incomplete')
-                if {name[:-len('_b.metal')] for name in outputs if name.endswith('_b.metal')} != checked:
-                    raise ValueError('verified batch variants are missing cached outputs')
+                outputs, _ = verified_batch_outputs(cache, checked, batch['keys'], a.jobs)
                 report.update(corpus_sha256=batch['corpus_sha256'], list_sha256=batch['list_sha256'],
                               known_requests=batch['known_requests'], log=str(log.resolve()),
                               log_sha256=sha256(log), verified_sha256=sha256(verified_list),
@@ -520,50 +605,12 @@ def main():
                                expected_listed_requests=progress['listed_requests'])
     progress.update(status='complete', totals=totals)
     atomic_json(progress_path, progress)
-    files, indexes = seed_files(cache, verified, a.jobs)
-    keys = sorted(n[:-len('.variants')] for n in files if n.endswith('.variants'))
-    missing = {k: inventory[k] for k in sorted(inventory.keys() - set(keys))}
-    (a.logs / f'ns2-seed-{v}-missing.json').write_text(json.dumps(missing, indent=2) + '\n')
-    if missing:
-        raise ValueError('verified full seed has missing cached shader keys')
-    shaders = sum(n.endswith('_b.metal') for n in files)
     here = Path(__file__).resolve().parent
     inputs = dict(chain=CHAIN, version=v, source_romfs_sha256=romfs_sha, translation_context_sha256=context,
                   nvn_depth_mode=a.depth_mode, translator_sha256=sha256(prebuilt),
                   shader_list_sha256=sha256(a.list) if a.list else None, corpus_sha256=sha256(corpus),
                   scripts_sha256={n: sha256(here / n) for n in ('prepare_ns2_seed.py', 'prepare_shader_seed.py', 'shader_list.py')},
                   only_sha256=sha256(a.only) if only else None)
-    if not indexes and seed_unchanged(out, files, inputs):
-        print(f'seed unchanged: its {len(files)} translation files are the ones published, from the same inputs; '
-              'kept as it is (no new links, digests or manifest)', flush=True)
-        return
-    staging = out.with_name(out.name + '.partial')
-    shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(parents=True)
-    for name, src in files.items():
-        if name in indexes:   # only the variants this run checked or made
-            (staging / name).write_text(json.dumps(indexes[name], sort_keys=True, separators=(',', ':'), ensure_ascii=False))
-            continue
-        os.link(src, staging / name) if src.stat().st_dev == staging.stat().st_dev else shutil.copy2(src, staging / name)
-    # every shader of the game, also the ones a quick seed leaves out: the runtime takes the scope as the game's shaders
-    # (totk_rt_note_set writes a shader outside it into the player's contribution file as new)
-    scope = shader_key_scope(sorted(corpus_inventory(full_corpus)) if only else keys, v, romfs_sha)
-    (staging / 'shader-keys.json').write_text(json.dumps(scope, separators=(',', ':')) + '\n')
-    # Unlike the shaders, a complete render-pipeline description needs the game's bind state: the warm-up lists come from
-    # the shared list's recorded rows (S / C / R / B / T), each variant named as this seed serves it (shader_list.py
-    # resolve, as the TOTK packaging's resolve_lists). Without a list the file only says so (never invent descriptors).
-    if a.list:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from shader_list import ShaderList, EXPORT, list_name
-        lst = ShaderList.load(a.list)
-        title, counts_t = lst.resolve(staging, 't')
-        rest, counts_m = lst.resolve(staging, 'm', given=title)
-        for name, rows, counts in (('pso_title.tsv', title, counts_t), ('pso_manifest.tsv', rest, counts_m)):
-            (staging / name).write_text(EXPORT.format(list_name(a.list)) + ''.join('\t'.join(row) + '\n' for row in rows))
-            print(f'{name}: {len(rows)} warm rows; left out {counts["other"]} of other versions, {counts["missing"]} the seed cannot build, '
-                  f'{counts["renamed"]} renamed to the seed\'s variants', flush=True)
-    else:
-        (staging / 'pso_manifest.tsv').write_text('# NS2 startup shaders; render pipelines come from the shared list.\n')
     report = dict(schema=1, chain=CHAIN, version=v, game=v, source_romfs_sha256=romfs_sha,
                   translation_context_sha256=context,
                   nvn_depth_mode=a.depth_mode,
@@ -572,27 +619,14 @@ def main():
                   corpus_sha256=sha256(corpus), corpus_inputs=want, all_default=True,
                   only=len(only) if only else None,   # a quick seed: only these shaders (the rest translated at first use)
                   stages={str(st): sum(x['stage'] == st for x in inventory.values()) for st in range(6)},
-                  preparation_sha256=sha256(Path(__file__).resolve()), shaders=shaders,
+                  preparation_sha256=sha256(Path(__file__).resolve()),
                   corpus_shaders=totals['corpus_shaders'], translated_default=totals['translated_default'],
                   listed_variants=totals['listed_variants'], listed_asked=totals['listed_asked'],
                   batch_receipts=progress,
-                  seconds=round(time.time() - t0, 1), inputs=inputs, files={})
-    report['files'], read = publish_digests(sorted(staging.iterdir()), out, lambda paths: parallel_sha256(paths, a.jobs))
-    print(f'seed files: {len(report["files"])}, {read} read again (the rest kept the digest of the last seed)', flush=True)
-    (staging / 'seed-manifest.json').write_text(json.dumps(report, indent=2) + '\n')
-    # Publish first; deleting tens of thousands of old files on an external APFS volume takes minutes. The old seed
-    # is entirely generated data and no longer read once its replacement is published.
-    old = out.with_name(f'.{out.name}.old-{os.getpid()}-{time.time_ns()}')
-    if out.exists(): out.rename(old)
-    try:
-        staging.rename(out)
-    except OSError:
-        if old.exists(): old.rename(out)
-        raise
-    if old.exists(): subprocess.Popen(['/bin/rm', '-rf', str(old)], start_new_session=True)
-    record_verified(out, report['files'])
-    print(json.dumps({k: report[k] for k in ('version', 'shaders', 'corpus_shaders', 'translated_default',
-                                             'listed_variants', 'listed_asked', 'seconds')}))
+                  inputs=inputs, files={})
+    publish_seed(out, cache, verified, inventory, report, started_at=t0, shader_list=a.list,
+                 scope_keys=sorted(corpus_inventory(full_corpus)) if only else None,
+                 logs=a.logs, jobs=a.jobs)
 
 
 if __name__ == '__main__':

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import struct
 import types
+import time
 import unittest
 from unittest import mock
 
@@ -16,6 +17,101 @@ import prepare_ns2_seed as seed
 
 
 class SeedTests(unittest.TestCase):
+    def publication_fixture(self, root):
+        cache = root/'cache'
+        cache.mkdir()
+        key = 'a'*64
+        verified, extra = key+'-'+'b'*12, key+'-'+'c'*12
+        entries = [dict(variant=name, deps={}, request='f'*64) for name in (verified, extra)]
+        (cache/(key+'.variants')).write_text(json.dumps(entries))
+        for name in (verified, extra):
+            (cache/(name+'_b.metal')).write_text('kernel void main0() {} // '+name)
+            (cache/(name+'_b.json')).write_text(json.dumps(dict(chain=seed.CHAIN, key=name+'_b', entry='main0')))
+        inputs = dict(chain=seed.CHAIN, version='oot', source_romfs_sha256='1'*64,
+                      translation_context_sha256='2'*64, nvn_depth_mode='minus-w', translator_sha256='3'*64,
+                      shader_list_sha256=None, corpus_sha256='4'*64, scripts_sha256={}, only_sha256=None)
+        metadata = dict(inputs, schema=1, game='oot', runtime_sha256='5'*64, corpus_inputs={},
+                        all_default=True, only=None, stages={'4': 1}, preparation_sha256='6'*64,
+                        corpus_shaders=1, translated_default=1, listed_variants=0, listed_asked=0,
+                        batch_receipts={'status': 'complete'}, inputs=inputs, files={})
+        return cache, key, verified, extra, metadata
+
+    def test_seed_publisher_filters_verified_variants_and_preserves_complete_cache(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cache, key, verified, extra, metadata = self.publication_fixture(root)
+            before = (cache/(key+'.variants')).read_bytes()
+            out = root/'published'
+            report = seed.publish_seed(out, cache, {verified}, {key: {'stage': 4}}, metadata,
+                                       started_at=time.time(), jobs=1)
+            self.assertEqual(json.loads((out/(key+'.variants')).read_text()),
+                             [json.loads(before)[0]])
+            self.assertFalse((out/(extra+'_b.metal')).exists())
+            self.assertTrue((cache/(extra+'_b.metal')).exists())
+            self.assertEqual((cache/(key+'.variants')).read_bytes(), before)
+            self.assertEqual((out/(verified+'_b.metal')).stat().st_ino,
+                             (cache/(verified+'_b.metal')).stat().st_ino)
+            self.assertEqual(json.loads((out/'shader-keys.json').read_text())['keys'], [key])
+            self.assertEqual(report['shaders'], 1)
+            self.assertEqual(report['inputs'], metadata['inputs'])
+            self.assertEqual(report['batch_receipts'], metadata['batch_receipts'])
+            self.assertEqual(json.loads((out/'seed-manifest.json').read_text()), report)
+            self.assertTrue(out.with_name('published.verified.json').is_file())
+            for name, digest in report['files'].items():
+                self.assertEqual(seed.sha256(out/name), digest)
+
+    def test_missing_verified_output_cannot_replace_existing_seed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cache, key, verified, extra, metadata = self.publication_fixture(root)
+            out = root/'published'
+            out.mkdir()
+            (out/'prior-seed').write_bytes(b'preserve prior published bytes')
+            (cache/(extra+'_b.metal')).unlink()
+            metadata.update(listed_variants=1, listed_asked=1)
+            with self.assertRaisesRegex(ValueError, 'missing cached outputs'):
+                seed.publish_seed(out, cache, {verified, extra}, {key: {'stage': 4}}, metadata,
+                                  started_at=time.time(), jobs=1)
+            self.assertEqual((out/'prior-seed').read_bytes(), b'preserve prior published bytes')
+            self.assertFalse(out.with_name('published.partial').exists())
+
+    def test_publication_context_or_reflection_mismatch_preserves_prior_seed(self):
+        for mismatch in ('context', 'reflection'):
+            with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                cache, key, verified, _, metadata = self.publication_fixture(root)
+                out = root/'published'
+                out.mkdir()
+                (out/'prior-seed').write_bytes(b'prior')
+                if mismatch == 'context':
+                    metadata['translator_sha256'] = 'e'*64
+                else:
+                    (cache/(verified+'_b.json')).write_text(json.dumps(dict(chain='old-chain', key=verified+'_b', entry='main0')))
+                with self.assertRaisesRegex(ValueError, 'context|reflection'):
+                    seed.publish_seed(out, cache, {verified}, {key: {'stage': 4}}, metadata,
+                                      started_at=time.time(), jobs=1)
+                self.assertEqual((out/'prior-seed').read_bytes(), b'prior')
+
+    def test_publication_rename_failure_restores_prior_seed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cache, key, verified, _, metadata = self.publication_fixture(root)
+            out = root/'published'
+            out.mkdir()
+            (out/'prior-seed').write_bytes(b'prior')
+            rename = Path.rename
+
+            def fail_staging(path, target):
+                if path == out.with_name('published.partial'):
+                    raise OSError('synthetic publication failure')
+                return rename(path, target)
+
+            with mock.patch.object(Path, 'rename', fail_staging):
+                with self.assertRaisesRegex(OSError, 'synthetic publication failure'):
+                    seed.publish_seed(out, cache, {verified}, {key: {'stage': 4}}, metadata,
+                                      started_at=time.time(), jobs=1)
+            self.assertEqual((out/'prior-seed').read_bytes(), b'prior')
+
     def corpus(self, path, count=4):
         records = []
         for number in range(count):
