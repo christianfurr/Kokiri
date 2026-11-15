@@ -20,3 +20,5 @@
 - 2026-11-15: The user requested a custom game startup/loading screen with the Kokiri logo. Use the existing original artwork and matching native styling. Loading messages must reflect observed phases; do not invent completion percentages or obstruct original gameplay/cutscenes.
 - 2026-11-15: Use the original leaf-K for both the product app and private game app's macOS icons. Build a full-resolution ICNS locally with the shared native icon script.
 - 2026-11-15: The user requested a local MCP interface for agent development. Observation of a human-owned session is separate from control of a newly owned disposable test. Preserve the human playtest save and learned same-chain pipeline records across switches.
+
+- 2026-11-15: User rejected the website’s sentimental slogans as corny. Use direct feature names and setup language, with plain sans-serif headings; retain the approved forest identity and interactive HUD.

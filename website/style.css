@@ -1150,3 +1150,39 @@ code {
     animation: none !important;
   }
 }
+
+/* Keep site headings direct and consistent with the native app. */
+h1,
+h2,
+.controls-heading h3,
+.catalog-flow h3,
+.follow h3 {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 550;
+  letter-spacing: -0.045em;
+}
+.hero h1 {
+  font-size: clamp(48px, 5.5vw, 78px);
+}
+h2,
+.catalog h2,
+.start h2 {
+  font-size: clamp(34px, 3.8vw, 52px);
+}
+.controls-heading h3 {
+  font-size: 22px;
+}
+.catalog-flow h3 {
+  font-size: 23px;
+}
+.catalog-heading {
+  margin-bottom: 20px;
+}
+@media (max-width: 760px) {
+  .hero h1 {
+    font-size: clamp(40px, 8vw, 58px);
+  }
+  .section-intro h2 {
+    font-size: 34px;
+  }
+}

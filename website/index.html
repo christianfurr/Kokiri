@@ -7,12 +7,12 @@
     <title>Kokiri — Ocarina of Time for Mac</title>
     <meta
       name="description"
-      content="A native Mac home for the Switch 2 edition of Ocarina of Time. Explore Kokiri's custom HUD, native launcher and open shader catalog project."
+      content="Ocarina of Time for Apple silicon Macs. A native launcher, configurable performance HUD and an open shader catalog in development."
     />
     <meta property="og:title" content="Kokiri — Ocarina of Time for Mac" />
     <meta
       property="og:description"
-      content="A familiar world. A native Mac home. Explore the interactive HUD preview and help shape Kokiri."
+      content="Ocarina of Time for Apple silicon Macs. Try the configurable HUD preview and view the source."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://christianfurr.github.io/Kokiri/" />
@@ -42,7 +42,7 @@
         />kokiri</a
       >
       <nav aria-label="Main navigation">
-        <a href="#experience">The experience</a>
+        <a href="#experience">Mac app</a>
         <a href="#hud">Try the HUD</a>
         <a href="#catalog">Shader catalog</a>
       </nav>
@@ -62,13 +62,11 @@
         />
         <div class="hero-shade"></div>
         <div class="hero-content wrap">
-          <p class="eyebrow">Ocarina of Time for Mac</p>
-          <h1 id="hero-title">
-            A familiar world.<br /><em>A native home.</em>
-          </h1>
+          <p class="eyebrow">Kokiri · Development preview</p>
+          <h1 id="hero-title">Ocarina of Time<br />for Mac</h1>
           <p class="hero-description">
-            Your adventure, made at home on Apple silicon. A native launcher,
-            custom controls, and a HUD your way.
+            The Switch 2 edition running natively on Apple silicon, with a
+            custom menu and configurable performance HUD.
           </p>
           <div class="actions">
             <a class="button button-light" href="#start"
@@ -94,19 +92,16 @@
         aria-labelledby="hud-title"
       >
         <div class="section-intro">
-          <p class="eyebrow green">Make it yours</p>
-          <h2 id="hud-title">
-            A little less guesswork.<br /><em>A little more your style.</em>
-          </h2>
+          <h2 id="hud-title">Customize the HUD.</h2>
           <p>
-            Keep an eye on your session without losing sight of the adventure.
-            Find your corner, choose your size, keep what matters.
+            Try the position, size and detail controls below. This is a web
+            preview of the options available in Kokiri.
           </p>
         </div>
         <div class="hud-workbench">
           <div class="preview-column">
             <div class="scene-toolbar">
-              <span class="scene-title">Explore the preview</span>
+              <span class="scene-title">HUD preview</span>
               <div
                 class="scene-options"
                 role="group"
@@ -167,7 +162,7 @@
             aria-label="Customize the HUD preview"
           >
             <div class="controls-heading">
-              <h3>Your HUD.</h3>
+              <h3>HUD settings</h3>
               <button type="reset" class="reset-button">Reset</button>
             </div>
             <fieldset>
@@ -268,30 +263,28 @@
         aria-labelledby="experience-title"
       >
         <div class="experience-copy">
-          <h2 id="experience-title">
-            Feels right.<br /><em>Right on your Mac.</em>
-          </h2>
+          <h2 id="experience-title">A native Mac app.</h2>
           <p>
-            A SwiftUI home for your game, your progress, and your session.
-            Connect a compatible build and pick up your adventure.
+            Launch a compatible game build, import a copy of your save profile,
+            and inspect session statistics in a SwiftUI app.
           </p>
           <dl class="experience-details">
             <div>
-              <dt>Bring your progress</dt>
+              <dt>Save import</dt>
               <dd>
                 Import a complete copy of your save profile. Your original stays
                 where it is.
               </dd>
             </div>
             <div>
-              <dt>See your session</dt>
+              <dt>Session statistics</dt>
               <dd>
                 Inspect local memory use and optional frame timing, with dated
                 recordings.
               </dd>
             </div>
             <div>
-              <dt>Stay in the game</dt>
+              <dt>In-game settings</dt>
               <dd>
                 Change HUD size, detail and placement through Kokiri’s custom
                 in-game menu.
@@ -325,11 +318,8 @@
               height="72"
               loading="lazy"
             />
-            <p class="eyebrow green">An open foundation</p>
           </div>
-          <h2 id="catalog-title">
-            Good discoveries<br /><em>should travel.</em>
-          </h2>
+          <h2 id="catalog-title">An open shader catalog.</h2>
           <p class="catalog-description">
             We’re building an open shader and pipeline catalog so compatible
             projects can share preparation metadata, with your choice to
@@ -338,12 +328,12 @@
           <ol class="catalog-flow">
             <li>
               <span class="flow-label">On your Mac</span>
-              <h3>Discover in play.</h3>
+              <h3>Record recipes</h3>
               <p>Record the pipeline recipes your runtime encounters.</p>
             </li>
             <li>
               <span class="flow-label">Shared metadata</span>
-              <h3>Contribute by choice.</h3>
+              <h3>Opt in to sharing</h3>
               <p>
                 Share validated recipes. Keep game files, saves and shader code
                 local.
@@ -351,7 +341,7 @@
             </li>
             <li>
               <span class="flow-label">Compatible builds</span>
-              <h3>Prepare locally.</h3>
+              <h3>Build local caches</h3>
               <p>
                 Use matching metadata to build a cache for your own graphics
                 backend.
@@ -367,7 +357,7 @@
             <a
               class="text-link"
               href="https://github.com/christianfurr/Kokiri/blob/HEAD/docs/catalog/integration.md"
-              >Explore the protocol <span aria-hidden="true">↗</span></a
+              >Read the protocol <span aria-hidden="true">↗</span></a
             >
           </div>
         </div>
@@ -379,13 +369,10 @@
         aria-labelledby="start-title"
       >
         <div class="start-intro">
-          <p class="eyebrow green">Build it with us</p>
-          <h2 id="start-title">
-            Your next<br /><em>adventure starts here.</em>
-          </h2>
+          <h2 id="start-title">Build Kokiri.</h2>
           <p>
-            Kokiri is open source and in early development. Bring your own game
-            files, a little patience, and help shape what comes next.
+            Kokiri currently requires a source build and your own game files.
+            Check the requirements and known issues before starting.
           </p>
           <a
             class="button button-green"
@@ -455,8 +442,8 @@
       </section>
       <section class="follow wrap" aria-labelledby="follow-title">
         <div>
-          <h3 id="follow-title">Watch it grow.</h3>
-          <p>Follow the work, share a reproducible bug, or lend a hand.</p>
+          <h3 id="follow-title">Development</h3>
+          <p>Source, updates and bug reports are on GitHub.</p>
         </div>
         <div class="follow-links">
           <a class="text-link" href="https://github.com/christianfurr/Kokiri"
