@@ -14,7 +14,7 @@ The service shares metadata only; no game files, shaders, caches or saves.
 | HTTP requests / POSTs | 300 / 60 per minute, global buckets |
 | Concurrent requests / connections | 8 / 32 |
 | Header / request-body bytes | 8 KiB / 64 KiB |
-| Body / overall request timeout | 5 / 10 seconds |
+| Body receive / HTTP receive and socket-idle budgets | 5 / 10 seconds |
 | Main SQLite database | 1 GiB maximum pages |
 | Free filesystem reserve | 512 MiB; backup also reserves snapshot space |
 | Database acknowledgments | Only after transactional commit; duplicates idempotent |
@@ -41,6 +41,11 @@ replacement. The host still needs supported OS/runtime maintenance. Resource
 caps intentionally prefer a rejected/retried contribution over disk or memory
 exhaustion; a global bucket can be exhausted by one caller. Public ingress needs
 edge abuse controls in addition to these origin limits.
+
+The ten-second HTTP receive/socket-idle settings are not an absolute deadline
+for the entire response handler. Body reception has its own five-second timer;
+bounded SQLite work has a one-second busy timeout. Process CPU/memory limits
+remain the outer boundary if a synchronous operation stalls.
 
 ## Build and tests
 

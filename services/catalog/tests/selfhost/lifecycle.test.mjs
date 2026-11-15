@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
@@ -44,12 +44,18 @@ test('bundled CLI starts under file permissions, closes gracefully, snapshots an
   assert.equal(off.status, 503);
   child.kill('SIGTERM'); assert.equal(await done, 0);
   assert(stdout.includes('catalog_started')); assert(!stdout.includes('synthetic non-secret'));
+  const stale = join(root, 'backups', '.backup-11111111-1111-1111-1111-111111111111.partial');
+  const recent = join(root, 'backups', '.backup-22222222-2222-2222-2222-222222222222.partial');
+  const unrelated = join(root, 'backups', 'operator-file.partial');
+  for (const file of [stale, recent, unrelated]) writeFileSync(file, 'synthetic', { mode: 0o600 });
+  utimesSync(stale, 0, 0); utimesSync(unrelated, 0, 0);
   for (let i = 0; i < 8; i++) {
     const b = await run([join(stage, 'backup.mjs')], env);
     assert.equal(b.code, 0, b.error + b.out);
   }
   const snapshots = readdirSync(join(root, 'backups')).filter(n => n.endsWith('.sqlite'));
   assert.equal(snapshots.length, 7);
+  assert(!existsSync(stale)); assert(existsSync(recent)); assert(existsSync(unrelated));
   for (const name of snapshots) {
     const file = join(root, 'backups', name);
     assert.equal(hashFile(file), readFileSync(file + '.sha256', 'utf8').trim());
