@@ -222,5 +222,32 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual(manifest['files'],expected)
 
 
+    def test_interrupted_compile_resumes_from_verified_checkpoint(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);cache=root/'cache';cache.mkdir();out=root/'libs'
+            for n in range(260):
+                (cache/f'fixture{n:04d}_b.metal').write_text(f'kernel void main{n}() {{}}')
+            calls=[0]
+            def compile_one(command,**kwargs):
+                calls[0]+=1
+                if calls[0]==251:raise RuntimeError('simulated interruption')
+                partial=Path(command[command.index('-o')+1]);partial.write_bytes(Path(command[-1]).read_bytes()+b' compiled')
+                return libraries.subprocess.CompletedProcess(command,0,'','')
+            argv=['build_shader_libs.py','--cache',str(cache),'--out',str(out),'--jobs','1']
+            with mock.patch.object(sys,'argv',argv), \
+                 mock.patch.object(libraries,'metal_compiler',return_value=('unused','fixture',{})), \
+                 mock.patch.object(libraries,'GameSlot',return_value=contextlib.nullcontext()), \
+                 mock.patch.object(libraries.subprocess,'run',side_effect=compile_one):
+                with self.assertRaisesRegex(RuntimeError,'interruption'):libraries.main()
+                progress=json.loads((out/'libraries-manifest.json').read_text())
+                self.assertFalse(progress['complete']);self.assertEqual(len(progress['files']),250)
+                calls[0]=0
+                with self.assertRaises(SystemExit) as done:libraries.main()
+                self.assertEqual(done.exception.code,0)
+                self.assertEqual(calls[0],10)
+                final=json.loads((out/'libraries-manifest.json').read_text())
+                self.assertTrue(final['complete']);self.assertEqual(len(final['files']),260)
+
+
 if __name__=='__main__':
     unittest.main()
