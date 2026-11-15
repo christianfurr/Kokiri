@@ -8,6 +8,34 @@ The payload is **Kokiri.app, the native launcher shell**. The game runtime,
 owned game files, saves and shader caches remain external. A shell update does
 not deliver game performance or rendering fixes.
 
+## Python environment
+
+From the repository root, create a dedicated environment outside the checkout:
+
+```sh
+python3.14 -m venv /absolute/private/kokiri-release-venv
+source /absolute/private/kokiri-release-venv/bin/activate
+python -m pip install --only-binary=:all: -r release/requirements.txt
+python -m pip check
+python -B -m unittest discover -s release -p 'test_runtime*.py' -v
+```
+
+Use this environment for the release commands below and the
+[runtime source updater](runtime-updates.md). The pinned dependency is
+`cryptography==50.0.2`; wheel-only installation avoids a local Rust/C build and
+fails if the selected interpreter/platform has no compatible wheel. These
+packages are tooling dependencies and are not bundled with the native app.
+CI can call the environment's `bin/python` directly instead of activating it.
+
+The original 2026-11-15 native diagnostic used CPython 3.13.3 and
+`cryptography==50.0.1`. That artifact evidence retains its original identities;
+the new pin has separate offline-test validation. The actual engine builder
+requires Python 3.14 or later.
+
+With the new pin, `pip check` and all 47 offline runtime/ownership tests passed
+in a fresh CPython 3.14.3 environment on 2026-11-15. The native diagnostic was
+not rerun for this dependency-only change.
+
 ## Private verification
 
 From the repository root on macOS:
@@ -20,8 +48,8 @@ This uses the existing `macos/build/Kokiri.app` as a read-only fixture source.
 It APFS-clones two temporary app bundles, generates random ephemeral test seeds,
 ad-hoc signs only those copies and runs the actual upstream tools. Nothing is
 installed or uploaded. The scoped workspace has a 50 MiB limit and is removed
-on completion. Python's `cryptography` package is required only for the release
-key-file path and self-test; it is not an app dependency.
+on completion. The pinned Python environment also supplies `cryptography` for
+the release key-file path, source updater and security tests.
 
 The latest checked result is [verification.json](verification.json). Checks
 include accepting genuine archive/feed/delta signatures; rejecting modified

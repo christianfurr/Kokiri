@@ -1,0 +1,2 @@
+# Release helpers and offline security tests; never bundled with the native app.
+cryptography==50.0.2

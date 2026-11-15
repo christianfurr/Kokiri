@@ -14,8 +14,9 @@ Full v28 preparation and integration acceptance remain prerequisites.
 ## Trust and build contract
 
 Keep this client in a trusted checkout, outside the downloaded source. Use
-Python 3.14 with `cryptography` installed. The public key comes from an owner
-configuration, never from the downloaded manifest. A store enrolls that key and
+the [dedicated release environment](README.md#python-environment), with Python
+3.14 and the pinned `release/requirements.txt` dependencies. The public key comes
+from an owner configuration, never from the downloaded manifest. A store enrolls that key and
 rejects a different key; key rotation requires a separately reviewed migration.
 The exact manifest bytes have a detached base64 Ed25519 signature. Required
 fields are:
@@ -166,7 +167,7 @@ automatic deletion or cache-pruning operation.
 
 ## Evidence limits
 
-Run `python3 -B -m unittest discover -s release -p 'test_runtime_update.py' -v`
+Run `python -B -m unittest discover -s release -p 'test_runtime*.py' -v`
 for source/signature/path/transaction fixtures. A mocked code-signature check is
 not signing acceptance. The release fixture harness, when separately granted,
 uses synthetic counters and a tiny diagnostic executable; it cannot establish
