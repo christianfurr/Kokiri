@@ -73,6 +73,7 @@ class RuntimeUpdateTests(unittest.TestCase):
         # Synthetic provenance; only the shared pure validator runs in these tests.
         return dict(
             observation_schema=2, qualified=True, backend='metal', version='offline compiler fixture',
+            loader_environment_policy='reject-nonempty-DYLD',
             executable_sha256='8' * 64,
             effective_flags=['-mmacosx-version-min=26.0', '-fmetal-math-mode=safe',
                              '-fpreserve-invariance', '-fwrapv'],
@@ -237,6 +238,25 @@ class RuntimeUpdateTests(unittest.TestCase):
         with patch.object(runtime.subprocess, 'run'):
             with self.assertRaises(ValueError):
                 runtime.inspect_app(app, self.record)
+
+    def test_candidate_requires_loader_environment_admission_policy(self):
+        app, original, original_info = self.app()
+        original_manifest = self.library_manifest(app)
+        for policy in (None, 'allow-DYLD-overrides'):
+            with self.subTest(policy=policy):
+                receipt, info, manifest = deepcopy(original), deepcopy(original_info), deepcopy(original_manifest)
+                observation = receipt['compiler_observation']
+                if policy is None:
+                    observation.pop('loader_environment_policy')
+                else:
+                    observation['loader_environment_policy'] = policy
+                manifest['compiler_observation'] = deepcopy(observation)
+                self.write_library_manifest(app, receipt, info, manifest)
+                # Even matching, rehashed receipt/manifest bytes must fail the
+                # shared validator when loader admission was not established.
+                with patch.object(runtime.subprocess, 'run'):
+                    with self.assertRaisesRegex(ValueError, 'Invalid qualified compiler observation'):
+                        runtime.inspect_app(app, self.record)
 
     def test_candidate_requires_current_target_and_each_correctness_flag(self):
         app, original, original_info = self.app()
