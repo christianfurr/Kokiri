@@ -26,7 +26,9 @@ class PreparationReceiptTests(unittest.TestCase):
                               sources=copy.deepcopy(self.seed['files']),
                               files={str(n) * 64 + '.metallib': 'e' * 64 for n in range(1, 4)})
         observation = dict(qualified=True, backend='metal', path='/private/compiler', version='fixture',
-                           executable_sha256='8' * 64, effective_flags=['-mmacosx-version-min=26.0', '-fwrapv'],
+                           executable_sha256='8' * 64,
+                           effective_flags=['-mmacosx-version-min=26.0', '-fmetal-math-mode=safe',
+                                            '-fpreserve-invariance', '-fwrapv'],
                            effective_target='air64-apple-macosx26.0.0', driver_plan='raw driver trace',
                            driver_plan_sha256='9' * 64, sdk_mode='compiler-default-resource-headers',
                            resource_headers={'content_sha256': '7' * 64},
@@ -46,6 +48,7 @@ class PreparationReceiptTests(unittest.TestCase):
             required_files=[dict(role='selected-invocation-input', sha256='3' * 64,
                                  path='/private/libmetal_rt_osx.a', size=123)],
             effective_invocations=[['/private/frontend', '-cc1', '-triple', 'air64-apple-macosx26.0.0',
+                                    '-fwrapv', '-fpreserve-invariance',
                                     '-o', '<intermediate.air>', '<probe-dir>/identity.metal'],
                                    ['/private/linker', '<intermediate.air>', '/private/libmetal_rt_osx.a',
                                     '-o', '<probe-dir>/identity.partial']])
@@ -119,10 +122,34 @@ class PreparationReceiptTests(unittest.TestCase):
 
     def test_compiler_observation_is_preserved_without_inferred_jit_equivalence(self):
         observation = self.libraries['compiler_observation']
+        expected_flags = list(observation['effective_flags'])
         result = receipt.require_prepared(self.make())
         self.assertEqual(result['compiler_observation'], observation)
         observation['effective_flags'].append('changed after receipt')
-        self.assertEqual(result['compiler_observation']['effective_flags'], ['-mmacosx-version-min=26.0', '-fwrapv'])
+        self.assertEqual(result['compiler_observation']['effective_flags'], expected_flags)
+
+    def test_trailing_driver_overrides_return_structured_error(self):
+        observation = self.libraries['compiler_observation']
+        flags = list(observation['effective_flags'])
+        for override in ('-fmetal-math-mode=fast', '-fno-wrapv', '-fno-preserve-invariance', '-ffast-math'):
+            with self.subTest(override=override):
+                observation['effective_flags'] = flags + [override]
+                self.reject('compiler observation identity is invalid')
+
+    def test_frontend_only_conflicts_return_structured_error(self):
+        observation = self.libraries['compiler_observation']
+        frontend = list(observation['effective_invocations'][0])
+        for override in ('-fno-wrapv', '-fno-preserve-invariance', '-fstrict-overflow'):
+            with self.subTest(override=override):
+                observation['effective_invocations'][0] = frontend + [override]
+                self.reject('compiler observation identity is invalid')
+
+    def test_safe_frontend_defaults_remain_qualified(self):
+        observation = self.libraries['compiler_observation']
+        observation['effective_invocations'][0].extend(
+            ['-fmetal-math-fp32-functions=fast', '-fno-rounding-math', '-ffp-contract=on'])
+        self.libraries['compiler_context_sha256'] = receipt.compiler_context_key(observation)
+        receipt.require_prepared(self.make())
 
     def test_missing_compiler_observation_cannot_be_prepared(self):
         self.libraries.pop('compiler_observation')
