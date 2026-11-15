@@ -34,6 +34,7 @@ LockPersonality=true
 MemoryMax=256M
 MemorySwapMax=0
 CPUQuota=20%
+CPUAffinity=0
 TasksMax=32
 LimitNOFILE=128
 LogRateLimitIntervalSec=60s

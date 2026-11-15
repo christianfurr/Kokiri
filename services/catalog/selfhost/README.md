@@ -21,7 +21,7 @@ The service shares metadata only; no game files, shaders, caches or saves.
 | Incoming records | Strict existing metadata schema; quarantine only |
 | GET routes | Curated immutable packs and signed manifests only |
 | Backup retention | Seven verified snapshots plus SHA-256 sidecars |
-| Unit limits | 256 MiB memory, no swap, 20% CPU (backup 10%), 32 tasks, 128 FDs |
+| Unit limits | 256 MiB memory, no swap, one logical CPU, 32 tasks, 128 FDs |
 
 Both units run as the existing unprivileged user, with no new privileges or
 capabilities. User/mount namespaces hide the rest of the home directory; only
@@ -46,6 +46,14 @@ The ten-second HTTP receive/socket-idle settings are not an absolute deadline
 for the entire response handler. Body reception has its own five-second timer;
 bounded SQLite work has a one-second busy timeout. Process CPU/memory limits
 remain the outer boundary if a synchronous operation stalls.
+
+Both units pin their threads to logical CPU 0. Check that this CPU is available
+on the target host before installation. They also request CPU quotas of 20% of
+one CPU (backup 10%) where the controller is delegated. On the assessed host,
+only memory and PID controllers are delegated to user services: `cpu.max` is
+absent, so those quota settings are **not enforced**. The independently checked
+CPU affinity is the active CPU boundary there, alongside request-rate limits;
+it does not imply a 20% time quota.
 
 ## Build and tests
 
