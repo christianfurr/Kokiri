@@ -1,5 +1,8 @@
 # Decisions
 
+- 2026-11-15: Integration alone accepts specialist commits and authorizes installation/releases; separate worktrees and an exclusive heavy-work grant protect the shared checkout and human gameplay. Acceptance requirements live in `docs/integration-acceptance.md`; current chat IDs and scheduling remain in a private ledger.
+- 2026-11-15: The earlier v28 mode-none package is not fully prepared. Require output-bound preparation receipts and matched cold/warm routes before readiness claims. The latest v28 human playtest reported no corruption; preserve that improvement without claiming broader visual acceptance. Save migration waits for verified lineage, not timestamps alone.
+
 - 2026-11-15: The user approved a forest-to-cream project website with an interactive HUD preview and GitHub Pages hosting. Keep it static, identify illustrative HUD data and earlier gameplay captures, and link to verified source/setup information. The website does not host the catalog API or game files.
 
 - 2026-11-15: The user chose Kokiri and authorized a standalone repository, not a GitHub fork. Preserve MacNativeGames and third-party notices and credit the source lineage.
