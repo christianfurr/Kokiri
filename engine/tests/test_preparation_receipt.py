@@ -57,7 +57,14 @@ class PreparationReceiptTests(unittest.TestCase):
         self.libraries['compiler_context_sha256'] = receipt.compiler_context_key(observation)
         self.pipelines = dict(chain=self.identity['chain'], runtime_sha256='f' * 64,
                               render=2, compute=1, mesh=1, kept=2, failed=0, write_failed=0,
-                              arch='fixture_gpu', listed_mesh=1, mesh_indexed=1)
+                              arch='fixture_gpu', listed_mesh=1, mesh_indexed=1,
+                              verify_only=True, verification_process_fresh=True, native_exit_code=0,
+                              verification_runtime_sha256='f' * 64, library_jit_attempts=0,
+                              archive_misses=0, archive_writes=0, verified_rows=6, archive_files_opened=1,
+                              libraries_manifest_sha256='f' * 64,
+                              compiler_context_sha256=self.libraries['compiler_context_sha256'],
+                              compiler_context_schema=2, archive_snapshot_before_sha256='e' * 64,
+                              archive_snapshot_after_sha256='e' * 64)
         self.artifacts = {field: 'f' * 64 for field in receipt.ARTIFACT_FIELDS}
 
     def make(self, mode='full', **kwargs):
@@ -80,6 +87,62 @@ class PreparationReceiptTests(unittest.TestCase):
         self.assertEqual(result['identity']['chain'], self.identity['chain'])
         self.assertEqual(result['artifact_sha256'], self.artifacts)
         self.assertIn('unobserved', result['limitation'])
+        self.assertEqual(result['pipelines']['successful_render'], 2)
+        self.assertNotIn('newly_render', result['pipelines'])
+        self.assertIn('including archive hits', result['pipelines']['counter_basis'])
+
+    def test_unsupported_old_archive_tool_cannot_claim_prepared(self):
+        for name in ('verify_only', 'library_jit_attempts', 'archive_misses', 'archive_writes', 'verified_rows'):
+            self.pipelines.pop(name)
+        self.reject('missing fresh read-only pipeline verification')
+
+    def test_apparent_success_with_runtime_compilation_is_rejected(self):
+        for name in ('library_jit_attempts', 'archive_misses', 'archive_writes'):
+            with self.subTest(field=name):
+                self.pipelines[name] = 1
+                self.reject('requires zero ' + name)
+                self.pipelines[name] = 0
+
+    def test_verify_flag_and_counters_are_fail_closed(self):
+        for name, value in (('verify_only', False), ('verification_process_fresh', False),
+                            ('verified_rows', 5), ('verified_rows', True), ('archive_files_opened', 0),
+                            ('archive_writes', False)):
+            with self.subTest(field=name, value=value):
+                original = self.pipelines[name]
+                self.pipelines[name] = value
+                self.reject('pipeline verification|fresh read-only')
+                self.pipelines[name] = original
+
+    def test_changed_final_libraries_require_another_actual_verification(self):
+        self.artifacts['libraries_manifest_sha256'] = '0' * 64
+        self.reject('differs from final libraries_manifest_sha256')
+
+    def test_changed_final_compiler_context_is_rejected(self):
+        self.pipelines['compiler_context_sha256'] = '0' * 64
+        self.reject('differs from final compiler_context_sha256')
+
+    def test_changed_archive_is_rejected_even_with_all_rows_reported(self):
+        self.pipelines['archive_snapshot_after_sha256'] = '0' * 64
+        self.reject('archive changed')
+
+    def test_missing_actual_library_binding_is_rejected(self):
+        self.pipelines.pop('libraries_manifest_sha256')
+        self.reject('differs from final libraries_manifest_sha256')
+
+    def test_stale_verification_runtime_is_rejected(self):
+        self.pipelines['verification_runtime_sha256'] = '0' * 64
+        self.reject('verification used another runtime')
+
+    def test_native_error_cannot_hide_behind_successful_counts(self):
+        self.pipelines['error'] = 'synthetic native failure'
+        self.reject('native process failed')
+
+    def test_shared_validator_rejects_failed_native_exit(self):
+        self.pipelines['native_exit_code'] = 1
+        errors = receipt.archive_verification_errors(self.pipelines, requested=6,
+            libraries_manifest_sha256=self.artifacts['libraries_manifest_sha256'],
+            compiler_context_sha256=self.libraries['compiler_context_sha256'], runtime_sha256='f' * 64)
+        self.assertTrue(any('native process failed' in error for error in errors))
 
     def test_changed_runtime_without_request_revalidation_is_not_prepared(self):
         self.artifacts['runtime_sha256'] = '0' * 64
@@ -92,6 +155,7 @@ class PreparationReceiptTests(unittest.TestCase):
         self.artifacts['runtime_sha256'] = '0' * 64
         self.pipelines['runtime_sha256'] = '0' * 64
         self.seed['runtime_sha256'] = '0' * 64
+        self.pipelines['verification_runtime_sha256'] = '0' * 64
         result = receipt.require_prepared(self.make())
         self.assertEqual(result['identity']['seed_runtime_sha256'], result['identity']['runtime_sha256'])
         self.assertEqual(result['identity']['translation_context_sha256'], 'c' * 64)
@@ -175,6 +239,7 @@ class PreparationReceiptTests(unittest.TestCase):
         observation['effective_invocations'][0].extend(
             ['-fmetal-math-fp32-functions=fast', '-fno-rounding-math', '-ffp-contract=on'])
         self.libraries['compiler_context_sha256'] = receipt.compiler_context_key(observation)
+        self.pipelines['compiler_context_sha256'] = self.libraries['compiler_context_sha256']
         receipt.require_prepared(self.make())
 
     def test_missing_compiler_observation_cannot_be_prepared(self):

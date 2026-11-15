@@ -9,7 +9,12 @@ import re
 try:
     from .metal_toolchain import compiler_context_key
 except ImportError:  # standalone script imports used by the build entry point
-    from metal_toolchain import compiler_context_key
+    import importlib.util
+    from pathlib import Path
+    _spec = importlib.util.spec_from_file_location('receipt_metal_toolchain', Path(__file__).with_name('metal_toolchain.py'))
+    _compiler = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_compiler)
+    compiler_context_key = _compiler.compiler_context_key
 
 
 DIGEST = re.compile(r'^[0-9a-f]{64}$')
@@ -17,6 +22,16 @@ COMMIT = re.compile(r'^[0-9a-f]{40,64}$')
 IDENTITY_FIELDS = ('chain', 'source_romfs_sha256', 'translator_sha256', 'nvn_depth_mode')
 ARTIFACT_FIELDS = ('seed_manifest_sha256', 'libraries_manifest_sha256',
                    'pipeline_manifest_sha256', 'pipeline_index_sha256', 'runtime_sha256')
+
+
+def preparation_artifact_paths(architecture):
+    base = 'Contents/Resources/totk/build/'
+    index = base + 'pipelines/pipelines-' + architecture + '.tsv' \
+        if isinstance(architecture, str) and re.fullmatch(r'[A-Za-z0-9_.-]+', architecture) else None
+    return dict(runtime_sha256='Contents/MacOS/KokiriGame',
+                seed_manifest_sha256=base+'shader-seed/seed-manifest.json',
+                libraries_manifest_sha256=base+'shader-libs/libraries-manifest.json',
+                pipeline_manifest_sha256=base+'pipelines/compute-manifest.json', pipeline_index_sha256=index)
 
 
 def _count(record, name, errors):
@@ -29,6 +44,42 @@ def _count(record, name, errors):
 
 def _difference(requested, completed):
     return max(0, requested - completed) if requested is not None and completed is not None else None
+
+
+def archive_verification_errors(report, *, requested, libraries_manifest_sha256,
+                                compiler_context_sha256, runtime_sha256):
+    """Check native verification against independently frozen final package inputs."""
+    errors = []
+    if report.get('verify_only') is not True or report.get('verification_process_fresh') is not True:
+        errors.append('missing fresh read-only pipeline verification')
+    if type(report.get('native_exit_code')) is not int or report['native_exit_code'] != 0 or report.get('error'):
+        errors.append('pipeline verification native process failed or lacks an exit status')
+    fields = ('render', 'compute', 'mesh', 'kept', 'failed', 'write_failed')
+    if any(type(report.get(field)) is not int or report[field] < 0 for field in fields):
+        errors.append('pipeline verification has invalid completion counters')
+    elif sum(report[field] for field in fields[:4]) != requested or report['failed'] or report['write_failed']:
+        errors.append('pipeline verification completion counters do not cover the requested rows')
+    for field in ('library_jit_attempts', 'archive_misses', 'archive_writes'):
+        if type(report.get(field)) is not int or report[field] != 0:
+            errors.append('pipeline verification requires zero ' + field)
+    if type(requested) is not int or requested <= 0 or type(report.get('verified_rows')) is not int \
+            or report['verified_rows'] != requested:
+        errors.append('pipeline verification does not cover every requested row')
+    if type(report.get('archive_files_opened')) is not int or report['archive_files_opened'] <= 0:
+        errors.append('pipeline verification has no actual archive reopen evidence')
+    if not isinstance(runtime_sha256, str) or not DIGEST.fullmatch(runtime_sha256) \
+            or report.get('verification_runtime_sha256') != runtime_sha256:
+        errors.append('pipeline verification used another runtime')
+    for field, expected in (('libraries_manifest_sha256', libraries_manifest_sha256),
+                            ('compiler_context_sha256', compiler_context_sha256)):
+        if not isinstance(expected, str) or not DIGEST.fullmatch(expected) or report.get(field) != expected:
+            errors.append('pipeline verification differs from final ' + field)
+    if type(report.get('compiler_context_schema')) is not int or report['compiler_context_schema'] != 2:
+        errors.append('pipeline verification lacks compiler context schema 2')
+    before, after = report.get('archive_snapshot_before_sha256'), report.get('archive_snapshot_after_sha256')
+    if not isinstance(before, str) or not DIGEST.fullmatch(before) or before != after:
+        errors.append('pipeline archive changed or lacks independent before/after snapshots')
+    return errors
 
 
 def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
@@ -176,7 +227,7 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
         errors.append('pipeline archive belongs to another shader chain')
     if pipelines.get('runtime_sha256') != artifact_sha256.get('runtime_sha256'):
         errors.append('pipeline archive belongs to another runtime')
-    if not isinstance(pipelines.get('arch'), str) or not pipelines.get('arch'):
+    if not isinstance(pipelines.get('arch'), str) or not re.fullmatch(r'[A-Za-z0-9_.-]+', pipelines['arch']):
         errors.append('pipeline archive has no GPU architecture')
     if type(pipeline_requested) is not int or pipeline_requested <= 0:
         pipeline_requested = None
@@ -193,6 +244,11 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
     mesh_indexed = _count(pipelines, 'mesh_indexed', errors)
     if mesh_requested is None or mesh_indexed is None or mesh_indexed < mesh_requested:
         errors.append('pipeline archive does not cover the declared mesh requests')
+    if mode == 'full':
+        errors.extend(archive_verification_errors(pipelines, requested=pipeline_requested,
+                      libraries_manifest_sha256=artifact_sha256.get('libraries_manifest_sha256'),
+                      compiler_context_sha256=compiler_context,
+                      runtime_sha256=artifact_sha256.get('runtime_sha256')))
     return dict(
         schema='kokiri-preparation-receipt-v1', mode=mode, prepared=not errors,
         identity=dict(source_commit=source_commit, **{field: seed.get(field) for field in IDENTITY_FIELDS},
@@ -214,14 +270,23 @@ def preparation_receipt(mode, seed, libraries, pipelines, *, expected_identity,
         pipelines=dict(requested=pipeline_requested, completed=completed,
                        failed=counts['failed'], write_failed=counts['write_failed'],
                        unaccounted=_difference(pipeline_requested, completed),
-                       newly_render=counts['render'], newly_compute=counts['compute'],
-                       newly_mesh=counts['mesh'], kept=counts['kept'],
+                       successful_render=counts['render'], successful_compute=counts['compute'],
+                       successful_mesh=counts['mesh'], kept=counts['kept'],
+                       counter_basis='successful pipeline requests including archive hits; not newly compiled pipelines',
                        mesh_requested=mesh_requested, mesh_indexed=mesh_indexed),
+        archive_verification={field: pipelines.get(field) for field in (
+            'verify_only', 'verification_process_fresh', 'verification_runtime_sha256',
+            'native_exit_code',
+            'library_jit_attempts', 'archive_misses', 'archive_writes', 'verified_rows',
+            'archive_files_opened', 'libraries_manifest_sha256', 'compiler_context_sha256',
+            'compiler_context_schema', 'archive_snapshot_before_sha256', 'archive_snapshot_after_sha256')},
+        library_jit_counter_basis='translated shader libraries only; excludes embedded host/support shaders and OS/driver code generation',
         observed_specializations=dict(requested=len(observed_sources), completed=observed_compiled,
                                       failed=len(observed_sources) - observed_compiled),
         compiler_observation=copy.deepcopy(observation), compiler_context_sha256=compiler_context,
         compiler_context_schema=compiler_context_schema,
         unresolved_inputs=copy.deepcopy(unresolved_inputs),
+        artifact_paths=preparation_artifact_paths(pipelines.get('arch')),
         artifact_sha256=dict(artifact_sha256), errors=errors,
         limitation='Coverage applies to the requested corpus, binding variants and pipeline lists; '
                    'unobserved gameplay variants may still compile.')

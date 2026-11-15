@@ -81,6 +81,39 @@ python3 -m unittest discover -s engine/tests -p 'test_standalone_build.py'
 
 # OOT 全量离线着色器
 
+## Kokiri full-preparation verification contract
+
+A full package must collect pipelines, compile the recorded specializations,
+recheck pipelines, then run a final **fresh-process** archive CLI pass with
+`KOKIRI_ARCHIVE_VERIFY_ONLY=1` and `TOTK_PAR_RECHECK=1`. Update passes explicitly
+use verify-only mode `0`; title and unprepared development packages do not gain
+a full-prepared claim. Existing translations may remain cached, but the seed's
+runtime request proof must match the current raw build executable.
+
+The final native report must attest read-only mode, exact successful requested
+rows, at least one actually opened archive file, zero translated-library JIT
+attempts, zero archive misses and zero archive writes. Its actual library
+manifest SHA-256 and compiler context must match the final prepared libraries.
+The builder additionally binds the native exit status, current raw runtime hash,
+unchanged request lists, and independently hashed/stat-frozen complete archive
+cache tree before and after verification. Missing fields in an older runtime
+cannot establish preparation. Embedded host/support shader and OS/driver code
+generation is outside the translated-library JIT counter.
+
+The app-relative proof is
+`Contents/Resources/totk/build/game-data/oot/preparation-receipt.json`; the native
+verification report is `Contents/Resources/totk/build/pipelines/compute-manifest.json`.
+Receipt `artifact_paths` maps each input digest to its app-relative path. Before
+signing, copied runtime, seed/library manifests, archive report and index must
+match those verified hashes. The final signed runtime hash remains an external
+package fingerprint because signing changes its raw bytes.
+
+`scripts/preparation_receipt.py::archive_verification_errors` is the shared pure
+validator for the final report. Receipt `successful_render`, `successful_compute`
+and `successful_mesh` count successful requests including cache hits; they are
+not counts of newly compiled pipelines. These gates still require actual native
+and gameplay qualification; Python fixtures do not establish Metal acceptance.
+
 OOT 的标准 Mac 构建从已核对的原始游戏数据提取着色器，经本游戏的运行时翻译，再编成 Metal 库。种子位于外部工作目录的 `oot/build/shader-seed/oot`，库位于 `oot/build/shader-libs`；打包后保存在独立签名的 `Contents/Helpers/ShaderData-oot.bundle`，运行时从 `Contents/Resources/totk/build/shader-seed` 和 `shader-libs` 的相对链接读取。
 
 ## 数据来源与数量

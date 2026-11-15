@@ -462,6 +462,7 @@ def pipeline_archive_environment(tree,cache,seed):
     return dict(os.environ,TOTK_NATIVE_DIR=str(tree/'build'),TOTK_SHADER_CACHE=str(cache),
                 TOTK_SHADER_SEED_DIR=str(seed),TOTK_PIPELINE_ARCHIVE_HOST='1',TOTK_DEBUG_LOG='1',
                 TOTK_PAR_RECHECK='1',TOTK_WARM_THREADS=str(shader_jobs()),
+                KOKIRI_ARCHIVE_VERIFY_ONLY='0',
                 TOTK_FAST_MATH='0',TOTK_SHADER_DEVICE_LIBS='0',OOT_UMUL_INLINE='0')
 
 def pipeline_library_inputs(libraries):
@@ -480,7 +481,30 @@ def pipeline_library_inputs(libraries):
     return dict(libraries_manifest_sha256=hashlib.sha256(raw).hexdigest(),
                 compiler_context_sha256=manifest['compiler_context_sha256'],compiler_context_schema=2)
 
-def compute_pipeline_archive(work, tree, lists, mode='full'):
+def pipeline_archive_snapshot(folder):
+    """Hash the entire cache tree, including directory/file identities and root drift."""
+    folder=Path(folder)
+    if not folder.is_dir():raise ValueError('missing archive cache for read-only verification')
+    def identity(path):
+        value=path.stat()
+        return [value.st_dev,value.st_ino,value.st_size,value.st_mode,value.st_mtime_ns,value.st_ctime_ns]
+    paths=[folder,*sorted(folder.rglob('*'))]
+    before={path.relative_to(folder).as_posix():identity(path) for path in paths}
+    entries={}
+    for path in paths:
+        if path.is_symlink():raise ValueError('symlink in pipeline archive cache: '+str(path))
+        name=path.relative_to(folder).as_posix()
+        if path.is_dir():entries[name]=dict(identity=before[name],kind='directory')
+        elif path.is_file():entries[name]=dict(identity=before[name],kind='file',sha256=sha(path))
+        else:raise ValueError('non-file in pipeline archive cache: '+str(path))
+    after={path.relative_to(folder).as_posix():identity(path) for path in [folder,*sorted(folder.rglob('*'))]}
+    if before!=after:raise ValueError('archive cache changed while hashing')
+    if not any(entry['kind']=='file' for entry in entries.values()):raise ValueError('empty archive cache')
+    encoded=json.dumps(entries,sort_keys=True,separators=(',',':')).encode()
+    return dict(sha256=hashlib.sha256(encoded).hexdigest(),entries=len(entries),
+                bytes=sum(entry['identity'][2] for entry in entries.values() if entry['kind']=='file'))
+
+def compute_pipeline_archive(work, tree, lists, mode='full', *, verify_only=False):
     """Build every seed compute pipeline and, with them, the render pipelines the App's warm-up lists name (lists: the
     pso_title.tsv / pso_manifest.tsv resolve_lists made from the current games/oot/assets/shader_list.tsv, the files the
     App carries), then package only a complete verified archive: every planned compute pipeline must be in the index; the
@@ -503,7 +527,12 @@ def compute_pipeline_archive(work, tree, lists, mode='full'):
     logs=work/'logs';logs.mkdir(exist_ok=True)
     log=logs/'compute-pipelines.log'
     env=pipeline_archive_environment(tree,cache,seed)
-    lists_sha256={p.name:sha(p) for p in lists}   # check_archive_lists compares them with the files the App carries
+    if verify_only:
+        if mode!='full':raise ValueError('strict final archive verification is only for full preparation')
+        env['KOKIRI_ARCHIVE_VERIFY_ONLY']='1'
+        log=logs/'verify-pipelines.log'
+    input_lists=tuple(lists)
+    lists_sha256={p.name:sha(p) for p in input_lists}   # check_archive_lists compares them with the files the App carries
     lists=[p for p in lists if p.is_file() and any(l and not l.startswith('#') for l in p.read_text().splitlines())]
     render_rows=sum(1 for p in lists for l in p.read_text().splitlines() if l.startswith(RENDER_ROWS))
     mesh_rows=sum(1 for p in lists for l in p.read_text().splitlines() if l.startswith(MESH_ROWS))
@@ -511,17 +540,37 @@ def compute_pipeline_archive(work, tree, lists, mode='full'):
                    if line.startswith(('C\t',*RENDER_ROWS,*MESH_ROWS))})
     print(f'Preparing {len(rows)} compute pipelines, {render_rows} listed render pipelines and {mesh_rows} listed mesh pipelines before packaging',flush=True)
     library_inputs=pipeline_library_inputs(libraries)
+    runtime_sha256=sha(work/'build/oot-native')
+    plan_sha256=sha(plan)
+    archive_before=archive_after=None
     with GameSlot(owner='build',purpose='OOT offline pipelines',expect_seconds=3600),log.open('w') as f:
+        if verify_only:archive_before=pipeline_archive_snapshot(cache)
         tool=subprocess.run([work/'build/oot-native',tree/'rewritten/oot','pipeline-archive',plan,*lists],
                        cwd=tree,env=env,stdout=f,stderr=subprocess.STDOUT)   # exit 1 when any row failed: judged from its report below
+        if verify_only:archive_after=pipeline_archive_snapshot(cache)
     if pipeline_library_inputs(libraries)!=library_inputs:
         raise ValueError('pipeline library manifest or compiler context changed during archive preparation')
+    if sha(work/'build/oot-native')!=runtime_sha256:
+        raise ValueError('runtime changed during archive preparation')
+    if sha(plan)!=plan_sha256 or {p.name:sha(p) for p in input_lists}!=lists_sha256:
+        raise ValueError('pipeline request lists changed during archive preparation')
     reports=[json.loads(line) for line in log.read_text().splitlines() if line.startswith('{"render":')]
     if not reports:raise ValueError(f'pipeline archive exit {tool.returncode} without a completion report; see {log}')
     report=reports[-1]
+    if any(type(report.get(k)) is not int or report[k]<0 for k in ('render','compute','mesh','kept','failed','write_failed')):
+        raise ValueError('pipeline archive has missing or invalid completion counters')
     completed=sum(report[k] for k in ('render','compute','mesh','kept'))
     if tool.returncode or report['write_failed'] or report['failed'] or completed != requested:
         raise ValueError('incomplete pipeline archive: '+str(report))
+    if verify_only:
+        report.update(verification_process_fresh=True,verification_runtime_sha256=runtime_sha256,native_exit_code=tool.returncode,
+                      archive_snapshot_before_sha256=archive_before['sha256'],
+                      archive_snapshot_after_sha256=archive_after['sha256'],
+                      archive_snapshot_entries=archive_before['entries'],archive_snapshot_bytes=archive_before['bytes'])
+        errors=_script('preparation_receipt').archive_verification_errors(report,requested=requested,
+                    libraries_manifest_sha256=library_inputs['libraries_manifest_sha256'],
+                    compiler_context_sha256=library_inputs['compiler_context_sha256'],runtime_sha256=runtime_sha256)
+        if errors:raise ValueError('archive verification failed: '+'; '.join(errors))
     target=tree/f'build/pipelines{suffix}'
     count=build_helpers().mac_pipeline_files(cache/'pipelines',target,report['arch'],chain)
     expected={'c'+hashlib.sha256(row[2:].encode()).hexdigest()[:40]for row in rows}
@@ -533,11 +582,13 @@ def compute_pipeline_archive(work, tree, lists, mode='full'):
     if mesh_rows and not mesh_indexed:raise ValueError(f'the pipeline archive holds none of the {mesh_rows} listed mesh pipelines; see {log}')
     if mesh_indexed<mesh_rows:raise ValueError(f'{mesh_rows-mesh_indexed} listed mesh pipelines are not in the archive; see {log}')
     report.update(planned=len(rows),listed_render=render_rows,listed_mesh=mesh_rows,mesh_indexed=mesh_indexed,lists=[p.name for p in lists],lists_sha256=lists_sha256,indexed=count,chain=chain,
-                  plan_sha256=sha(plan),runtime_sha256=sha(work/'build/oot-native'),
+                  plan_sha256=plan_sha256,runtime_sha256=runtime_sha256,
                   requested=requested,completed=completed,
                   **library_inputs,
-                  library_input_binding='intended manifest snapshot; actual library use and zero-JIT proof are not established by this record',
+                  library_input_binding=('native-read final manifest and strict fresh-process zero-JIT archive verification' if verify_only else
+                                         'intended manifest snapshot; actual library use and zero-JIT proof are not established by this record'),
                   counter_basis='render/compute count successful PSO creation including archive hits; kept does not count newly compiled pipelines',
+                  library_jit_counter_basis='translated shader libraries only; excludes embedded host/support shaders and OS/driver code generation',
                   files={p.name:sha(p)for p in sorted(target.iterdir()) if p.is_file() and p.name!='compute-manifest.json'})
     (target/'compute-manifest.json').write_text(json.dumps(report,indent=2)+'\n')
     return target
@@ -605,6 +656,16 @@ def verify_recorded_variant_coverage(libraries,caches):
             raise ValueError('unprepared recorded specialization after pipeline recheck: '+name)
     return len(sources)
 
+def verify_staged_preparation_inputs(app,receipt):
+    """Check the copied inputs before signing changes the runtime's raw bytes."""
+    if receipt.get('prepared') is not True:return
+    paths=_script('preparation_receipt').preparation_artifact_paths(receipt['identity']['gpu_architecture'])
+    for key,relative in paths.items():
+        try:actual=sha(Path(app)/relative) if relative else None
+        except OSError as error:raise ValueError('missing staged preparation input: '+key) from error
+        if actual!=receipt['artifact_sha256'].get(key):
+            raise ValueError('staged preparation input differs from verified receipt: '+key)
+
 def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=None,mode=None,learned_caches=()):
     """Stage a sealed App containing its runtime data, then replace the closed App. mode: shader_mode, recorded in the
     App (MNGShaders) for its updates and MNG Launcher."""
@@ -630,6 +691,8 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
         pipelines=compute_pipeline_archive(work,tree,lists,mode)
         shader_record=verify_shader_resources(tree,mode)
         verify_recorded_variant_coverage(shader_dirs(tree,mode)[1],(*learned_caches,archive_cache))
+        if mode=='full':
+            pipelines=compute_pipeline_archive(work,tree,lists,mode,verify_only=True)
     receipt=write_preparation_receipt(work,tree,mode,pipelines)
     prepared=shader_bundle(tree,shader_record,mode) if shader_record else None
     opening_overlay=tree/'extracted/oot/opening-patches'
@@ -700,6 +763,7 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
     if commit:info['MNGSourceCommit']=commit   # the HUD box and the Update page name the commit the app was built from
     (res/'KokiriCatalogContext.json').write_text(json.dumps(context,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\n')
     (temporary/'Contents/Info.plist').write_bytes(plistlib.dumps(info));(temporary/'Contents/PkgInfo').write_bytes(b'APPL????')
+    verify_staged_preparation_inputs(temporary,receipt)
     subprocess.run(['codesign','--force','--sign','-',temporary],check=True)
     subprocess.run(['codesign','--verify','--strict',temporary],check=True)
     # The installed .app folder stays and takes the new contents: macOS keeps its first-run check of an app with the folder.
