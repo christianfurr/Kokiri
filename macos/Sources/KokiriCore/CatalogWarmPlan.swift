@@ -31,6 +31,17 @@ public struct CatalogRuntimeIdentity: Sendable {
         }
         let options = value["options"] as! [String: Any]
         let compiler = value["compiler"] as! [String: Any]
+        // This reader understands the runtime-JIT scheme emitted by the
+        // renderer. An offline preparation receipt has different semantics;
+        // a self-consistent hash does not make that scheme supported here.
+        _ = try CatalogWire.object(compiler, ["schema", "observed", "kind", "platform_compiler_identity", "os_build", "metal_api_uuid"])
+        try CatalogWire.require(compiler["kind"] as? String == "metal-runtime-jit" &&
+            compiler["platform_compiler_identity"] as? String == "os-build-and-public-metal-api-image",
+            "This compiler identity scheme is not supported for catalog warm-up.")
+        guard let metalUUID = compiler["metal_api_uuid"] as? String,
+              let uuid = UUID(uuidString: metalUUID), uuid.uuidString.lowercased() == metalUUID else {
+            throw KokiriError.message("The runtime compiler API identity is invalid.")
+        }
         var size = 0
         guard sysctlbyname("kern.osversion", nil, &size, nil, 0) == 0, size > 0, size < 128 else { throw KokiriError.message("The current OS build could not be observed.") }
         var os = [CChar](repeating: 0, count: size)

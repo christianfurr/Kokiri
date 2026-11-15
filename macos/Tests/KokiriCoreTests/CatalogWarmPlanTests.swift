@@ -23,7 +23,10 @@ final class CatalogWarmPlanTests: XCTestCase {
             XCTAssertEqual(sysctlbyname("kern.osversion", nil, &size, nil, 0), 0)
             var os = [CChar](repeating: 0, count: size)
             XCTAssertEqual(sysctlbyname("kern.osversion", &os, &size, nil, 0), 0)
-            let compiler: [String: Any] = ["schema":"kokiri-compiler-identity/1", "observed":true, "os_build":String(cString:os), "test_fixture":true]
+            // Synthetic API UUID, never an observation of a real Metal device.
+            let compiler: [String: Any] = ["schema":"kokiri-compiler-identity/1", "observed":true, "os_build":String(cString:os),
+                "kind":"metal-runtime-jit", "platform_compiler_identity":"os-build-and-public-metal-api-image",
+                "metal_api_uuid":"11111111-2222-4333-8444-555555555555"]
             let target: [String: Any] = ["schema":"kokiri-target-identity/1", "observed":true, "test_fixture":true]
             let options: [String: Any] = ["schema":"kokiri-options-identity/1", "observed":true, "runtime_sha256":runtimeHash, "test_fixture":true]
             var context: [String: Any] = ["game_id":"oot", "game_version":"131072", "game_content_sha256":String(repeating:"1", count:64),
@@ -78,6 +81,21 @@ final class CatalogWarmPlanTests: XCTestCase {
         }
         func prepare(_ index: URL? = nil, floor: Int = 3, keys: [String: Data]? = nil) throws -> CatalogWarmPlan? {
             try CatalogWarmPlan.prepare(index:index ?? self.index(), identity:identity, trustedKeys:keys ?? self.keys, minimumRevision:floor, output:root.appendingPathComponent("session"))
+        }
+        func rewriteCompilerAndRehash(_ edit: (inout [String: Any]) -> Void) throws {
+            let file = root.appendingPathComponent("identity.json")
+            var value = try XCTUnwrap(JSONSerialization.jsonObject(with:Data(contentsOf:file)) as? [String:Any])
+            var compiler = try XCTUnwrap(value["compiler"] as? [String:Any])
+            var context = try XCTUnwrap(value["context"] as? [String:Any])
+            edit(&compiler)
+            context["compiler_sha256"] = CatalogWire.hash(try CatalogWire.canonical(compiler))
+            value["compiler"] = compiler; value["context"] = context
+            value["context_id"] = CatalogWire.hash(try CatalogWire.canonical(context))
+            try CatalogWire.canonical(value).write(to:file)
+        }
+        func reloadIdentity() throws -> CatalogRuntimeIdentity {
+            try CatalogRuntimeIdentity.load(root.appendingPathComponent("identity.json"), runtime:runtime,
+                template:root.appendingPathComponent("template.json"), allowedCache:root.appendingPathComponent("shader-cache"))
         }
     }
     func testSignedNovelComputeRecipeUsesOnlyExistingLocalBytes() throws {
@@ -135,6 +153,43 @@ final class CatalogWarmPlanTests: XCTestCase {
         try Data("different runtime fixture".utf8).write(to:fixture.runtime)
         XCTAssertThrowsError(try CatalogRuntimeIdentity.load(fixture.root.appendingPathComponent("identity.json"),runtime:fixture.runtime,
             template:fixture.root.appendingPathComponent("template.json"),allowedCache:fixture.root.appendingPathComponent("shader-cache")))
+    }
+    func testOfflineAndUnknownCompilerSchemesFailEvenWithConsistentHashes() throws {
+        for kind in ["metal-offline", "metal-offline-and-jit", "unknown"] {
+            let fixture = try Fixture()
+            try fixture.rewriteCompilerAndRehash { $0["kind"] = kind }
+            XCTAssertThrowsError(try fixture.reloadIdentity())
+        }
+    }
+    func testOfflineEvidenceCannotBeEmbeddedInTheRuntimeJITDescriptor() throws {
+        for (key, value) in [("platform_compiler_identity", "offline-executable-hash"),
+                             ("compiler_context_sha256", String(repeating:"a", count:64))] {
+            let fixture = try Fixture()
+            try fixture.rewriteCompilerAndRehash { $0[key] = value }
+            XCTAssertThrowsError(try fixture.reloadIdentity())
+        }
+    }
+    func testCompilerAPIUUIDRequiresTheCanonicalProducerFormat() throws {
+        for value in ["not-a-uuid", "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", "{11111111-2222-4333-8444-555555555555}"] {
+            let fixture = try Fixture()
+            try fixture.rewriteCompilerAndRehash { $0["metal_api_uuid"] = value }
+            XCTAssertThrowsError(try fixture.reloadIdentity())
+        }
+        let missing = try Fixture()
+        try missing.rewriteCompilerAndRehash { _ = $0.removeValue(forKey:"metal_api_uuid") }
+        XCTAssertThrowsError(try missing.reloadIdentity())
+    }
+    func testSignedMeshMetadataRemainsUnchangedWithoutAnOrdinaryWarmPlan() throws {
+        let fixture = try Fixture()
+        let task = String(repeating:"a", count:64) + "-bbbbbbbbbbbb_b"
+        let mesh = String(repeating:"c", count:64) + "-dddddddddddd_b"
+        try fixture.row("M\t" + task + "\t" + mesh + ":-:z180.\tm")
+        let index = try fixture.index()
+        let pack = try XCTUnwrap(FileManager.default.contentsOfDirectory(at:fixture.root.appendingPathComponent("packs"),includingPropertiesForKeys:nil).first)
+        let original = try Data(contentsOf:pack)
+        XCTAssertNil(try fixture.prepare(index))
+        XCTAssertEqual(try Data(contentsOf:pack), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath:fixture.root.appendingPathComponent("session").path))
     }
     func testRepeatedRejectedVariantIsReadOnceAcrossManyRenderRecipes() throws {
         let fixture = try Fixture(), good = try fixture.variant(1,stage:5), wrongStage = try fixture.variant(2,stage:1)

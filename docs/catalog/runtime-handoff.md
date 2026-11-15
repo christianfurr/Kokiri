@@ -82,6 +82,13 @@ path cannot change admitted rows because workers read the retained text.
 
 ## Compiler identity meaning
 
+The native reader explicitly accepts only the currently emitted runtime-JIT
+compiler descriptor fields and scheme, including its canonical API UUID. A
+different/offline scheme or extra offline evidence is rejected even when its
+descriptor/context hashes agree. A preparation receipt's qualified offline
+compiler context must not be relabeled as this JIT descriptor. Full offline or
+mixed-path admission still needs a separate reviewed semantic contract.
+
 `compiler_sha256` hashes a canonical descriptor declaring
 `kind=metal-runtime-jit` and
 `platform_compiler_identity=os-build-and-public-metal-api-image`. This is the
