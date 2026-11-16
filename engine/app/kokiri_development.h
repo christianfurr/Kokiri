@@ -251,6 +251,10 @@ static BOOL kokiri_private_prepare(NSString *root, NSString *resources, NSString
             if (!fstatat(directory,mixedNames[i],&mixed,AT_SYMLINK_NOFOLLOW) || errno != ENOENT) good=NO;
         }
     } else {
+        /* A human-preview root cannot be converted into a controlled session,
+           even by adding an otherwise valid development request and lease. */
+        struct stat humanPreview;
+        if (!fstatat(directory,"preview.json",&humanPreview,AT_SYMLINK_NOFOLLOW) || errno != ENOENT) good=NO;
         good = good && kokiri_dev_hex(request[@"nonce"],64) && [request[@"nonce"] isEqualToString:@(claimedNonce)] &&
             kokiri_dev_number(request[@"expires_unix"]) && expiry>now && expiry<=now+1800 &&
             kokiri_dev_lease(kokiri_dev_json(directory,"lease.json"),request[@"session_id"],request[@"nonce"],expiry);

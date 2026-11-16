@@ -244,6 +244,29 @@ int main(int argc,char **argv) { @autoreleasepool {
         (self.root / "ownership.json").write_text("{}")
         self.assertEqual(self.run_fixture(human=True).returncode, 2)
 
+    def test_development_entry_rejects_all_preview_markers_before_writes(self):
+        marker = self.root / "preview.json"
+        for kind in ("regular", "directory", "dangling-symlink", "fifo"):
+            with self.subTest(kind=kind):
+                if kind == "regular":
+                    marker.write_text('{"owner":"user"}')
+                elif kind == "directory":
+                    marker.mkdir()
+                elif kind == "dangling-symlink":
+                    marker.symlink_to(self.root / "missing-preview")
+                else:
+                    os.mkfifo(marker)
+                before = {p.name: p.lstat() for p in self.root.iterdir()}
+                result = self.run_fixture()
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual({p.name for p in self.root.iterdir()}, set(before))
+                for name, previous in before.items():
+                    current = (self.root / name).lstat()
+                    self.assertEqual((current.st_ino, current.st_size, current.st_mtime_ns),
+                                     (previous.st_ino, previous.st_size, previous.st_mtime_ns))
+                self.assertFalse((self.root / "profile").exists())
+                marker.rmdir() if kind == "directory" else marker.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

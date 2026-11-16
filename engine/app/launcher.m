@@ -204,13 +204,14 @@ int runtime_app_launch(int argc, char **argv, char ***boot) {
     @autoreleasepool {
         id preview=NSBundle.mainBundle.infoDictionary[@"KokiriHumanPreviewVersion"];
         BOOL previewEntry=argc>1 && !strcmp(argv[1],"--kokiri-preview");
+        BOOL developmentEntry=argc>1 && !strcmp(argv[1],"--kokiri-development");
         BOOL check=argc==2 && !strcmp(argv[1],"--check");
-        if ((preview && (!kokiri_dev_schema(preview) || (!previewEntry && !check))) || (previewEntry && !kokiri_dev_schema(preview))) {
+        if ((preview && (!kokiri_dev_schema(preview) || (!previewEntry && !developmentEntry && !check))) || (previewEntry && !kokiri_dev_schema(preview))) {
             fprintf(stderr,"[kokiri-preview] use the private human-preview launcher; shared player defaults are disabled\n");
             return 1;
         }
         if(previewEntry)return kokiri_human_preview_launch(argc,argv,boot);
-        if (argc > 1 && !strcmp(argv[1], "--kokiri-development"))
+        if (developmentEntry)
             return kokiri_development_launch(argc, argv, boot);
         NSString *root = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"totk"];
         NSString *binary = [root stringByAppendingPathComponent:@"rewritten/" TOTK_GAME_DIR "/main.patched.bin"];   // the game's code
