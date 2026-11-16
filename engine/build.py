@@ -18,6 +18,7 @@ TITLE='0400486024DEC000'
 PRODUCT_VERSION = '0.1.0'
 RUNTIME_BUNDLE_ID = 'com.christianfurr.kokiri.runtime'
 RUNTIME_EXECUTABLE = 'KokiriGame'
+PRIVATE_RUNTIME_CAPABILITIES = ('KokiriHumanPreviewVersion', 'KokiriDevelopmentVersion')
 _helpers = None
 _shader_tools = None
 
@@ -69,13 +70,27 @@ def ensure_disk_space(path):
 
 def validate_runtime_app(app):
     app = Path(app)
+    if any(path.is_symlink() for path in (app,app/'Contents',app/'Contents/Info.plist')):
+        raise ValueError('runtime app metadata must not use symbolic links')
     if app.exists():
         try:
             info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
         except (OSError, ValueError) as error:
             raise ValueError('existing output is not a Kokiri runtime app') from error
-        if info.get('CFBundleIdentifier') != RUNTIME_BUNDLE_ID:
+        if not isinstance(info,dict) or info.get('CFBundleIdentifier') != RUNTIME_BUNDLE_ID:
             raise ValueError('refusing to replace an app not owned by Kokiri')
+        return private_runtime_capabilities(info)
+    return {}
+
+def private_runtime_capabilities(info):
+    """Carry only explicit private declarations, never other old app metadata."""
+    capabilities = {}
+    for key in PRIVATE_RUNTIME_CAPABILITIES:
+        if key in info:
+            if type(info[key]) is not int or info[key] != 1:
+                raise ValueError('invalid private runtime capability: '+key)
+            capabilities[key] = 1
+    return capabilities
 
 def shader_service_folders(work):
     import xml.etree.ElementTree as ET
@@ -666,11 +681,21 @@ def verify_staged_preparation_inputs(app,receipt):
         if actual!=receipt['artifact_sha256'].get(key):
             raise ValueError('staged preparation input differs from verified receipt: '+key)
 
-def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=None,mode=None,learned_caches=()):
+def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=None,mode=None,learned_caches=(),private_capabilities=None):
     """Stage a sealed App containing its runtime data, then replace the closed App. mode: shader_mode, recorded in the
-    App (MNGShaders) for its updates and MNG Launcher."""
+    App (MNGShaders) for its updates and MNG Launcher. Private full builds read their owned output metadata;
+    staged updates pass the source app's validated declarations before sealing the new runtime."""
     mode=mode or shader_mode()
-    validate_runtime_app(out)
+    existing_capabilities=validate_runtime_app(out)
+    if private_capabilities is None:
+        # A private full build can start with an owned output's metadata only.
+        private_capabilities=existing_capabilities
+    else:
+        if not isinstance(private_capabilities,dict) or set(private_capabilities)-set(PRIVATE_RUNTIME_CAPABILITIES):
+            raise ValueError('unrecognized private runtime capabilities')
+        private_capabilities=private_runtime_capabilities(private_capabilities)
+        if Path(out).exists() and existing_capabilities!=private_capabilities:
+            raise ValueError('private runtime capabilities differ from the existing output')
     ensure_disk_space(work)
     context=catalog_context(tree)
     shader_record=verify_shader_resources(tree,mode) if mode!='none' else None
@@ -744,6 +769,7 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
     # builds it from its pinned source), so the App carries no dylib for it, only its license.
     clone_file(GAME/'third_party/dav1d-COPYING',res/'licenses/dav1d-COPYING')
     info=runtime_metadata(mode,exact_source_commit())
+    info.update(private_capabilities)
     icon=tree/'build/KokiriAppIcon.icns'
     subprocess.run(['bash',GAME.parent/'macos/scripts/create_icon.sh',
                     GAME.parent/'assets/brand/kokiri-mark.png',icon],check=True)
@@ -848,11 +874,15 @@ def update_runtime(app,work=None,out=None,shared=None,learned_caches=()):
     """Put a new runtime into an App this build made, keeping its shaders: rebuild the runtime and its pipeline archive only.
     The translations and Metal libraries of the last full build are reused; a new translation chain, translator or request
     code needs the full build. A running game is waited for, not closed."""
-    app=Path(app).resolve();validate_runtime_app(app)
-    destination=Path(out).expanduser().resolve() if out else app
+    app=Path(app).expanduser();private_capabilities=validate_runtime_app(app);app=app.resolve()
+    destination=Path(out).expanduser() if out else app
+    destination_capabilities=validate_runtime_app(destination)
+    destination=destination.resolve()
     if out and destination==app:raise ValueError('staged rebuild output must differ from the source app')
     if destination.suffix!='.app':raise ValueError('staged rebuild output must end in .app')
-    external_workspace(destination);validate_runtime_app(destination)
+    external_workspace(destination)
+    if destination.exists() and destination_capabilities!=private_capabilities:
+        raise ValueError('private runtime capabilities differ from the existing output')
     work=external_workspace(work if work else build_helpers().recorded_work_folder(app,'Kokiri-work')[0]);ensure_disk_space(work)   # the app's own record first
     if out:
         validate_staged_paths(app,destination,work)
@@ -889,7 +919,8 @@ def update_runtime(app,work=None,out=None,shared=None,learned_caches=()):
     if out and folder:
         # Staging must never publish into the original player's mutable library.
         folder=work/'staged-game-data'
-    package_app(work,tree,destination,'library' if folder else 'app',folder,mode=mode,shared=shared,learned_caches=learned_caches)
+    package_app(work,tree,destination,'library' if folder else 'app',folder,mode=mode,shared=shared,learned_caches=learned_caches,
+                private_capabilities=private_capabilities)
     print(f'built {destination} in {time.monotonic()-start:.0f} s',flush=True)
 
 def update_shaders(app,listfile,work=None):
@@ -977,7 +1008,9 @@ def build(args, source):
     device=args.platform=='ios'
     if args.update or args.dlc or args.mod:raise ValueError('use the complete original update 131072 in the dump/NUP')
     source=Path(source).resolve()
-    out=args.out.expanduser().resolve() if args.out else source.parent/'Kokiri Game.app'
+    out=args.out.expanduser() if args.out else source.parent/'Kokiri Game.app'
+    validate_runtime_app(out)   # validate owned metadata before resolving any app alias
+    out=out.resolve()
     # without --work: the folder the app records, else MacNativeGames-work/oot beside the apps folder (build_app.default_work)
     work,why=(args.work.expanduser().resolve(),'given with --work') if args.work else build_helpers().default_work(out,'oot')
     print(f'work folder {work} ({why})',flush=True)
