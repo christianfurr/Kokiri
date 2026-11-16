@@ -153,7 +153,7 @@ See [Sparkle customization](https://sparkle-project.org/documentation/customizat
 The existing source builder has a separate local runtime rebuild route:
 
 ```sh
-python3 -I engine/build.py \
+python3.14 -I engine/build.py \
   --rebuild '/absolute/path/Kokiri Game.app' \
   --work /absolute/path/existing-game-workspace
 ```

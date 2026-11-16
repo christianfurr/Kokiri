@@ -1,8 +1,10 @@
 # Production catalog trust activation plan
 
-Status: concrete proposal for integration review, not an activation receipt.
-No production key has been generated, no recipes published and no host or
-contribution setting changed by this document. Fixture keys are not eligible.
+Historical proposal dated 2026-11-15, not an activation receipt. Its key and
+host baseline below describes that assessment, rather than the current service.
+See [project status](../../STATUS.md) for reviewed milestones. This document
+itself changes no key, publication or contribution setting. Fixture keys are
+not eligible for production.
 
 ## Public security boundary
 

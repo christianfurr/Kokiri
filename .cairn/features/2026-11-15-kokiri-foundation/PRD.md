@@ -28,7 +28,7 @@ Import pinned public OoT source and reviewed fixes, with source-only copies of r
 
 ## Latest steering
 
-The user requested closure of our MacNativeGames PRs. All three open PRs (#2180, #2181, #2206) were closed on 2026-11-15; further development belongs in Kokiri. Initial standalone source commit `bb8c3e4` is public and all three CI jobs passed. Cloudflare CLI authentication is currently absent, so a deployed public catalog is not yet available.
+On 2026-11-15, the user requested closure of our MacNativeGames PRs. All three open PRs (#2180, #2181, #2206) were closed that day; further development belongs in Kokiri. Initial standalone source commit `bb8c3e4` became public and all three CI jobs passed. The initial assessment lacked Cloudflare CLI authentication. See [current project status](../../../STATUS.md) for later catalog milestones and remaining acceptance; this foundation brief does not record live service availability.
 
 ## Verification
 

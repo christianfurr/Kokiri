@@ -26,9 +26,11 @@ Use a Node version supported by the pinned `cf` CLI (see `engines`). This Mac's
 Node tests use actual local workerd/D1 through Miniflare, not a SQL mock. Python
 tests require `cryptography`; native client tests require macOS Swift/CryptoKit.
 
-There is no deployed endpoint or production signing key. Do not use synthetic
-test keys for production. The seed is 56 attributed public metadata records,
-unsigned and reference-only. It does not claim cache coverage or performance.
+The public protocol endpoint responds; a published dataset and verified native
+adoption remain pending. See [project status](../../STATUS.md) for current
+acceptance. Do not use synthetic test keys for production. The seed is 56
+attributed public metadata records, unsigned and reference-only. It does not
+claim cache coverage or performance.
 
 Storage is D1 only; immutable metadata packs are bounded small JSON documents.
 R2 is unnecessary until measured pack sizes justify it. No native binary upload
