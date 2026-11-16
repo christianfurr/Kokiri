@@ -159,7 +159,7 @@ def create_server(manager: Development) -> MCPServer:
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--workspace",type=Path,default=Path.home()/"Library/Application Support/Kokiri/Development/Workbench")
+    parser.add_argument("--workspace",type=Path,default=Path.home()/"Library/Application Support/KokiriDevelopment/Workbench")
     args=parser.parse_args()
     create_server(Development(args.workspace)).run(transport="stdio")
 

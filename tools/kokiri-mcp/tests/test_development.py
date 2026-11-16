@@ -352,4 +352,55 @@ class DevelopmentTests(unittest.TestCase):
             with self.assertRaises(KokiriError):self.manager.capture(self.id)
 
 
+class DevelopmentWorkspaceDefaultsTests(unittest.TestCase):
+    """Exercise both CLI parsers without creating a registry, fixture or server."""
+
+    home = Path('/Users/kokiri-default-test')
+
+    def cli_workspaces(self, override=None):
+        import development_admin
+        import development_server
+
+        admin_args = ['development_admin.py', 'runtime', 'candidate', '/private/unused/Game.app']
+        server_args = ['development_server.py']
+        if override is not None:
+            admin_args[1:1] = ['--workspace', str(override)]
+            server_args += ['--workspace', str(override)]
+        with patch.object(Path, 'home', return_value=self.home), \
+                patch.object(sys, 'argv', admin_args), \
+                patch.object(development_admin, 'register', return_value={}) as register, \
+                patch('builtins.print'):
+            development_admin.main()
+        register.assert_called_once()
+        admin_workspace = register.call_args.args[0]
+        with patch.object(Path, 'home', return_value=self.home), \
+                patch.object(sys, 'argv', server_args), \
+                patch.object(development_server, 'Development') as manager, \
+                patch.object(development_server, 'create_server') as create_server:
+            development_server.main()
+        manager.assert_called_once()
+        create_server.assert_called_once_with(manager.return_value)
+        create_server.return_value.run.assert_called_once_with(transport='stdio')
+        return admin_workspace, manager.call_args.args[0]
+
+    def test_both_cli_defaults_select_the_development_workspace(self):
+        expected = self.home / 'Library/Application Support/KokiriDevelopment/Workbench'
+        self.assertEqual(self.cli_workspaces(), (expected, expected))
+
+    def test_default_workspace_is_outside_native_protected_player_trees(self):
+        # These are the native private entry's protected trees. This parser
+        # contract does not replace its runtime filesystem-identity checks.
+        protected = ('Library/Application Support/Kokiri', 'Library/Application Support/MacNativeGames',
+                     'Library/Logs/Kokiri', 'Library/Logs/MacNativeGames')
+        for workspace in self.cli_workspaces():
+            for suffix in protected:
+                player = self.home / suffix
+                with self.subTest(workspace=workspace, protected=player):
+                    self.assertFalse(workspace.is_relative_to(player) or player.is_relative_to(workspace))
+
+    def test_explicit_workspace_is_preserved_by_both_clis(self):
+        explicit = Path('/private/kokiri-selected-workbench')
+        self.assertEqual(self.cli_workspaces(explicit), (explicit, explicit))
+
+
 if __name__=='__main__':unittest.main()

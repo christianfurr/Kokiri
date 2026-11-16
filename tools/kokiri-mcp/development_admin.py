@@ -56,7 +56,7 @@ def register(workspace: Path, kind: str, identifier: str, source: Path, acceptan
 def main():
     import json
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--workspace",type=Path,default=Path.home()/"Library/Application Support/Kokiri/Development/Workbench")
+    parser.add_argument("--workspace",type=Path,default=Path.home()/"Library/Application Support/KokiriDevelopment/Workbench")
     parser.add_argument("kind",choices=["runtime","fixture","scenario"])
     parser.add_argument("identifier")
     parser.add_argument("source",type=Path)

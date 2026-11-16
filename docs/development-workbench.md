@@ -6,6 +6,10 @@
 
 Local setup uses `development_admin.py` to register a built runtime, selected source profile and typed scenario files. The MCP accepts registry IDs; it has no arbitrary file, shell, memory-write or command-forwarding tool. Registration does not launch a game or grant the exclusive benchmark slot.
 
+Both `development_admin.py` and `development_server.py` default to `~/Library/Application Support/KokiriDevelopment/Workbench`, a separate location outside the protected Kokiri and MacNativeGames support/log trees. To choose another private location, pass the same explicit `--workspace /absolute/path` to both commands. The native entry also rejects a workspace that aliases or overlaps a protected tree.
+
+Existing workbench data stays at its original location. This default change creates no migration or automatic adoption of previous sessions.
+
 ```sh
 python development_admin.py runtime candidate '/private/build/Kokiri Game.app'
 python development_admin.py fixture child-route /private/selected-profile
