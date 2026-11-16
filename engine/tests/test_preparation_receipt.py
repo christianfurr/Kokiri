@@ -80,6 +80,19 @@ class PreparationReceiptTests(unittest.TestCase):
             receipt.require_prepared(result)
         return result
 
+    def test_pipeline_rejections_are_explicit_and_cannot_fill_a_coverage_gap(self):
+        admission = {'pso_manifest.tsv': dict(source_sha256='1' * 64,
+            rejected_host_rows=[dict(reason='PSO_HOST_BITS', kind='R', host_bits=64,
+                                    input_canonical_row_sha256='2' * 64)])}
+        self.pipelines['pipeline_list_admission'] = admission
+        value = self.make()
+        self.assertTrue(value['prepared'])
+        self.assertEqual(value['pipeline_list_admission'], admission)
+        admission.clear()
+        self.assertTrue(value['pipeline_list_admission'])   # Receipt owns its provenance snapshot.
+        self.pipelines['compute'] = 0
+        self.assertFalse(self.make()['prepared'])
+
     def test_exact_full_request_accounting_is_prepared(self):
         result = receipt.require_prepared(self.make())
         self.assertEqual(result['variants']['unique_completed'], 3)
