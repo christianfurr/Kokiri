@@ -2,7 +2,7 @@ name: Publish Kokiri website
 
 on:
   push:
-    branches: [feat/kokiri-foundation]
+    branches: [master]
     paths:
       - "website/**"
       - "scripts/check_publication.py"
