@@ -64,14 +64,16 @@ and bundled context before attributing appended rows to a session. Importing a
 whole legacy profile must not relabel old v23 recipes as new v28 output.
 
 Current boundary: service/reference/native clients are locally implemented.
-A production trust key, public hosting and verified runtime adoption of the
-downloaded metadata artifact remain separate integration gates. No live catalog
-availability or performance gain is claimed.
+The public protocol endpoint responds, but a published dataset and verified
+native adoption remain pending. Production key/hosting verification does not
+establish exact runtime target/options compatibility or warm-up benefit. See
+[current project status](../../STATUS.md); no measured performance gain is claimed.
 
 ## Kokiri native handoff
 
 The native C/R handoff, execution identity producer and renderer admission hook
 are described in [runtime-handoff.md](runtime-handoff.md). They are CPU tested;
-actual gameplay adoption and public hosting remain unverified. Mesh pipelines
+actual gameplay adoption remains unverified. Public protocol availability does
+not establish compatible catalog delivery. Mesh pipelines
 and precompiled-library compiler provenance are not supported by that first
 adapter, so it does not claim to resolve the measured cold mesh hitches.
