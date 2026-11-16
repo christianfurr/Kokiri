@@ -54,7 +54,7 @@ def shader_tools():
 def external_workspace(path):
     path = Path(path).expanduser().resolve()
     repo = GAME.parent.resolve()
-    if path == repo or repo in path.parents:
+    if path_contains(repo,path):
         raise ValueError('build output must remain outside the Kokiri source repository')
     return path
 
@@ -68,7 +68,7 @@ def ensure_disk_space(path):
     if available_space(path) < 2 * (1 << 30):
         raise OSError('less than 2 GiB free; build stopped without deleting data')
 
-def validate_runtime_app(app):
+def validate_runtime_app(app,*,required=False):
     app = Path(app)
     if any(path.is_symlink() for path in (app,app/'Contents',app/'Contents/Info.plist')):
         raise ValueError('runtime app metadata must not use symbolic links')
@@ -80,6 +80,8 @@ def validate_runtime_app(app):
         if not isinstance(info,dict) or info.get('CFBundleIdentifier') != RUNTIME_BUNDLE_ID:
             raise ValueError('refusing to replace an app not owned by Kokiri')
         return private_runtime_capabilities(info)
+    if required:
+        raise ValueError('rebuild source runtime app is missing')
     return {}
 
 def private_runtime_capabilities(info):
@@ -216,14 +218,28 @@ def exact_source_commit():
         return commit   # authenticated by the updater before extraction/build, not a synthetic git HEAD
     return ''
 
+def path_contains(parent,child):
+    """Include existing filesystem identities: resolve() preserves APFS case aliases."""
+    try:
+        parent,child=Path(parent).resolve(),Path(child).resolve()
+        if parent==child or parent in child.parents:return True
+        try:identity=parent.stat()
+        except FileNotFoundError:return False
+        for ancestor in (child,*child.parents):
+            try:current=ancestor.stat()
+            except FileNotFoundError:continue   # a fresh output may not exist yet
+            if (identity.st_dev,identity.st_ino)==(current.st_dev,current.st_ino):return True
+        return False
+    except OSError as error:
+        raise ValueError('build path identities could not be verified') from error
+
 def paths_overlap(a,b):
-    a,b=Path(a).resolve(),Path(b).resolve()
-    return a==b or a in b.parents or b in a.parents
+    return path_contains(a,b) or path_contains(b,a)
 
 def validate_staged_paths(app,destination,work):
     if paths_overlap(app,destination) or paths_overlap(app,work):
         raise ValueError('staged rebuild must not overlap the original app')
-    if destination==work or destination in work.parents:
+    if path_contains(destination,work):
         raise ValueError('staged rebuild work must not be inside its replaceable output app')
     original=plistlib.loads((app/'Contents/Info.plist').read_bytes())
     for key in ('MNGWorkFolder','MNGGameDataFolder'):
@@ -752,7 +768,7 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
     if game_data_mode=='library':
         game_data_folder=(Path(game_data_folder) if game_data_folder else Path.home()/'Library/Application Support/Kokiri/OcarinaOfTime/GameData').expanduser().resolve()
         repo=GAME.parent
-        if game_data_folder==repo or repo in game_data_folder.parents:raise ValueError('game library must remain outside the source checkout')
+        if path_contains(repo,game_data_folder):raise ValueError('game library must remain outside the source checkout')
         build_app.place_library_image(tree,'oot','oot',game_data_folder,expected_romfs=imported_romfs(tree))   # the launcher compares it with romfs-config.txt
     elif game_data_mode=='app':
         logs=work/'logs';logs.mkdir(exist_ok=True)
@@ -874,20 +890,21 @@ def update_runtime(app,work=None,out=None,shared=None,learned_caches=()):
     """Put a new runtime into an App this build made, keeping its shaders: rebuild the runtime and its pipeline archive only.
     The translations and Metal libraries of the last full build are reused; a new translation chain, translator or request
     code needs the full build. A running game is waited for, not closed."""
-    app=Path(app).expanduser();private_capabilities=validate_runtime_app(app);app=app.resolve()
+    app=Path(app).expanduser();private_capabilities=validate_runtime_app(app,required=True);app=app.resolve()
     destination=Path(out).expanduser() if out else app
     destination_capabilities=validate_runtime_app(destination)
     destination=destination.resolve()
-    if out and destination==app:raise ValueError('staged rebuild output must differ from the source app')
+    if out and paths_overlap(app,destination):raise ValueError('staged rebuild output must not overlap the source app')
     if destination.suffix!='.app':raise ValueError('staged rebuild output must end in .app')
     external_workspace(destination)
     if destination.exists() and destination_capabilities!=private_capabilities:
         raise ValueError('private runtime capabilities differ from the existing output')
-    work=external_workspace(work if work else build_helpers().recorded_work_folder(app,'Kokiri-work')[0]);ensure_disk_space(work)   # the app's own record first
+    work=external_workspace(work if work else build_helpers().recorded_work_folder(app,'Kokiri-work')[0])   # the app's own record first
     if out:
         validate_staged_paths(app,destination,work)
+    ensure_disk_space(work)
     repo=GAME.parent
-    if work==repo or repo in work.parents:raise ValueError('game build data must remain outside the source checkout')
+    if path_contains(repo,work):raise ValueError('game build data must remain outside the source checkout')
     tree=work/'oot'
     mode=shader_mode(app)
     if mode=='none':mode='full'   # an update always carries shaders, as before (an App of OOT_BUNDLE_SHADERS=0 gets them all)
@@ -1015,9 +1032,9 @@ def build(args, source):
     work,why=(args.work.expanduser().resolve(),'given with --work') if args.work else build_helpers().default_work(out,'oot')
     print(f'work folder {work} ({why})',flush=True)
     repo=GAME.parent
-    if work==repo or repo in work.parents:raise ValueError('game build data must remain outside the source checkout')
+    if path_contains(repo,work):raise ValueError('game build data must remain outside the source checkout')
     if out.suffix!='.app' and not (device and out.suffix=='.ipa'):raise ValueError('output must end in .app'+(' or .ipa' if device else ''))
-    if out==repo or repo in out.parents:raise ValueError('App must remain outside the source checkout')
+    if path_contains(repo,out):raise ValueError('App must remain outside the source checkout')
     if args.vr or args.native_4k or args.native_5k:raise ValueError('this title currently uses its original rendering options')
     # Nothing to install from Homebrew (2026-11-12): the rewrite check disassembles with Xcode's llvm-objdump
     # (third_party/d2r/structck.py) and the opening overlay cuts its clip in Python (scripts/webm_one_frame.py).

@@ -248,7 +248,77 @@ class PrivateRuntimeMetadataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'differ from the existing output'):
             build.package_app(self.root/'work',self.root/'tree',app,private_capabilities=self.capabilities)
 
-    def package(self,capabilities,*,update=False):
+    def case_alias(self,path):
+        alias=path.with_name(path.name.swapcase())
+        if not alias.exists() or not alias.samefile(path):
+            self.skipTest('Temporary filesystem has no case-insensitive spelling alias')
+        return alias
+
+    def test_missing_source_metadata_fails_before_disk_or_tools(self):
+        missing=self.root/'Missing.app';empty=self.root/'Empty.app';empty.mkdir()
+        with patch.object(build,'ensure_disk_space',side_effect=AssertionError('unexpected disk probe')), \
+             patch.object(build,'ensure_shader_service',side_effect=AssertionError('unexpected tool work')):
+            for source in (missing,empty):
+                with self.subTest(source=source),self.assertRaisesRegex(ValueError,'runtime app'):
+                    build.update_runtime(source,work=self.root/'work',out=self.root/'Candidate.app')
+        self.assertFalse((self.root/'work').exists())
+        self.assertFalse((self.root/'Candidate.app').exists())
+
+    def test_unreadable_source_metadata_fails_before_disk_or_tools(self):
+        source=self.app('Source.app',self.metadata())
+        with patch.object(Path,'read_bytes',side_effect=PermissionError('synthetic unreadable metadata')), \
+             patch.object(build,'ensure_disk_space',side_effect=AssertionError('unexpected disk probe')), \
+             patch.object(build,'ensure_shader_service',side_effect=AssertionError('unexpected tool work')):
+            with self.assertRaisesRegex(ValueError,'runtime app'):
+                build.update_runtime(source,work=self.root/'work',out=self.root/'Candidate.app')
+
+    def test_identity_comparison_includes_existing_child_ancestors(self):
+        # Portable identity fixture in addition to the real APFS cases below.
+        source,alias=self.root/'Source',self.root/'AlternateSpelling'
+        original_stat=Path.stat
+        def metadata(path,*args,**kwargs):
+            if path in (source,alias):return SimpleNamespace(st_dev=41,st_ino=17)
+            return original_stat(path,*args,**kwargs)
+        with patch.object(Path,'stat',metadata):
+            self.assertTrue(build.paths_overlap(source,alias))
+            self.assertTrue(build.path_contains(source,alias/'not-created'))
+            self.assertTrue(build.paths_overlap(alias/'not-created',source))
+            self.assertFalse(build.path_contains(alias/'not-created',source))
+
+    def test_unavailable_path_identity_fails_closed(self):
+        source=self.root/'Source';source.mkdir()
+        with patch.object(Path,'stat',side_effect=PermissionError('synthetic identity failure')):
+            with self.assertRaisesRegex(ValueError,'identities could not be verified'):
+                build.paths_overlap(source,self.root/'Other')
+
+    def test_case_alias_source_and_ancestors_fail_before_work(self):
+        source=self.app('Original.app',self.metadata(self.capabilities));alias=self.case_alias(source)
+        before=(source/'Contents/Info.plist').read_bytes()
+        with patch.object(build,'ensure_disk_space',side_effect=AssertionError('unexpected disk probe')), \
+             patch.object(build,'ensure_shader_service',side_effect=AssertionError('unexpected tool work')):
+            for destination,work in ((alias,self.root/'work'),(alias/'Nested.app',self.root/'work'),
+                                     (self.root/'Candidate.app',alias/'new-work')):
+                with self.subTest(destination=destination,work=work),self.assertRaisesRegex(ValueError,'staged rebuild'):
+                    build.update_runtime(source,work=work,out=destination)
+        self.assertEqual((source/'Contents/Info.plist').read_bytes(),before)
+
+    def test_case_alias_output_work_and_recorded_data_fail_before_work(self):
+        source=self.app('Source.app',self.metadata(self.capabilities))
+        destination=self.app('Candidate.app',self.metadata(self.capabilities));alias=self.case_alias(destination)
+        cases=[(alias/'new-work',None,None)]
+        for key in ('MNGWorkFolder','MNGGameDataFolder'):
+            original=self.root/key;original.mkdir()
+            cases.append((self.case_alias(original)/'new-work',key,original))
+        with patch.object(build,'ensure_disk_space',side_effect=AssertionError('unexpected disk probe')), \
+             patch.object(build,'ensure_shader_service',side_effect=AssertionError('unexpected tool work')):
+            for work,key,original in cases:
+                metadata=self.metadata(self.capabilities)
+                if key:metadata[key]=str(original)
+                (source/'Contents/Info.plist').write_bytes(plistlib.dumps(metadata))
+                with self.subTest(key=key),self.assertRaisesRegex(ValueError,'staged rebuild'):
+                    build.update_runtime(source,work=work,out=destination)
+
+    def package(self,capabilities,*,update=False,in_place=False):
         """Exercise real packaging order with tiny resources and mocked proof/tools."""
         root=self.root;work=root/'work';tree=work/'oot';(work/'logs').mkdir(parents=True)
         runtime=work/'build/oot-native';runtime.parent.mkdir();runtime.write_bytes(b'new compiled runtime fixture')
@@ -260,6 +330,7 @@ class PrivateRuntimeMetadataTests(unittest.TestCase):
             source_metadata=self.metadata(capabilities);source_metadata['MNGGameDataFolder']=str(root/'original-game-data')
             source=self.app('Source.app',source_metadata)
             source_bytes=(source/'Contents/Info.plist').read_bytes()
+            if in_place:output=source
         else:
             self.app(output.name,self.metadata(capabilities))   # no old executable is needed
         receipt=dict(prepared=False,artifact_sha256={'runtime_sha256':build.sha(runtime)})
@@ -304,7 +375,7 @@ class PrivateRuntimeMetadataTests(unittest.TestCase):
             for key,value in values.items():stack.enter_context(patch.object(build,key,value))
             stack.enter_context(patch.object(build.shutil,'copytree',side_effect=copy_tree))
             stack.enter_context(patch.object(build.subprocess,'run',side_effect=command))
-            if update:build.update_runtime(source,work=work,out=output)
+            if update:build.update_runtime(source,work=work,out=None if in_place else output)
             else:build.package_app(work,tree,output,'library',root/'game-data',mode='full')
         info=plistlib.loads((output/'Contents/Info.plist').read_bytes())
         fingerprint=json.loads((work/'logs/package-output.json').read_text())
@@ -314,7 +385,7 @@ class PrivateRuntimeMetadataTests(unittest.TestCase):
         self.assertEqual(info['CFBundleIdentifier'],build.RUNTIME_BUNDLE_ID)
         self.assertEqual(info['CFBundleExecutable'],build.RUNTIME_EXECUTABLE)
         self.assertFalse(info['KokiriPrepared'])   # synthetic resources prove metadata ordering only
-        if update:self.assertEqual((source/'Contents/Info.plist').read_bytes(),source_bytes)
+        if update and not in_place:self.assertEqual((source/'Contents/Info.plist').read_bytes(),source_bytes)
         self.assertLess(sum(path.stat().st_size for path in root.rglob('*') if path.is_file()),1<<20)
         return info
 
@@ -332,6 +403,10 @@ class PrivateRuntimeMetadataTests(unittest.TestCase):
 
     def test_ordinary_staged_update_stays_unmarked(self):
         info=self.package({},update=True)
+        for key in self.capabilities:self.assertNotIn(key,info)
+
+    def test_ordinary_in_place_update_stays_unmarked(self):
+        info=self.package({},update=True,in_place=True)
         for key in self.capabilities:self.assertNotIn(key,info)
 
 
