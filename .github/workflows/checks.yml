@@ -98,6 +98,7 @@ jobs:
       - name: Check native development ownership and human takeover
         run: |
           python3 -I -m unittest discover -s engine/tests -p test_development_launcher.py -v
+          python3 -I -m unittest discover -s engine/tests -p test_private_entry_gate.py -v
           python3 -I -m unittest discover -s engine/tests -p test_development_input.py -v
           python3 -I -m unittest discover -s engine/tests -p test_game_slot_takeover.py -v
           python3 -I -m unittest discover -s engine/tests -p test_human_preview_spawn.py -v
