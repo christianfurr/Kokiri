@@ -1,5 +1,7 @@
 # Hosting and operations
 
+Current public reference service and native-download acceptance are recorded in [project status](../../STATUS.md) and [integration](integration.md). The dated implementation/proposal evidence below retains its original scope.
+
 ## Self-hosting assessment
 
 The implemented guarded Node/SQLite adapter and private-stage instructions now

@@ -1,10 +1,10 @@
 ---
-verified_at_sha: null
-verified_at: 2026-11-15
+verified_at_sha: 4b25230a95097a44ad509f96e75c467e6b534de8
+verified_at: 2026-11-16
 ---
 # Kokiri
 
-New independent repository. Source integration and product verification are in progress.
+Independent Mac project. [STATUS.md](../STATUS.md) is the dated public acceptance summary; [BUILDING.md](../BUILDING.md) covers current build/import entry points. The map's documentation and publication routes were checked against the source revision above; acceptance requirements are not completion claims.
 
 - `.cairn/features/2026-11-15-kokiri-foundation/PRD.md`: accepted project scope and verification gates.
 - `.cairn/DECISIONS.md`: product/runtime boundaries and attribution decisions.
@@ -14,11 +14,12 @@ New independent repository. Source integration and product verification are in p
 - `LICENSE`: MIT terms preserving upstream copyright.
 - `engine/`: pinned public native runtime, reviewed ownership/mesh/NS2 transfer fixes, standalone build entry. External source-built shader tools use serviced NativeAOT 10.0.14; copied-profile gameplay verification is in progress.
 - `engine/docs/kokiri-startup.md`: original logo startup presentation, real phase/readiness rules and offscreen native view validation.
-- `macos/`: SwiftUI Home, profile-aware Play/Settings, local preparation and public Shader Library, measured session reader and Sparkle updater. `KokiriCore/ShaderLibrary.swift` reads bound preparation receipts and full metadata lists; reference downloads remain separate from exact runtime warm-up.
+- `macos/`: SwiftUI Home, profile-aware Play/Settings, receipt-bound preparation counts, public Shader Library and measured session reader with Sparkle updater. `macos/README.md` documents capabilities and configuration. Real, dated Home/Performance captures and provenance are in `assets/readme/`.
 - `services/catalog/`: open exact-context metadata protocol, Worker/D1 service, quarantine/signing, queue SDK and local tests.
 - `assets/brand/`: original Kokiri logo and generation provenance.
 - `website/`: buildless GitHub Pages site with an interactive, sample-data HUD preview; asset provenance and local preview instructions live alongside it. `.github/workflows/pages.yml` publishes only this folder.
-- `release/`: signed shell archive/appcast/delta preparation; 20 checks include actual delta reconstruction and tamper rejection. Production signing/hosting remains unavailable.
-- `docs/`: build, adapter, privacy and measured-performance documentation. Public reference hosting is live; native warm-plan gameplay adoption remains acceptance work.
+- `release/`: signed shell archive/appcast/delta preparation and a separate signed runtime-source updater. Local fixture/diagnostic tests do not establish actual game update/relaunch/rollback or production delivery; each route documents its remaining gates.
+- `docs/README.md`: navigation for build, adapter, privacy, performance and release documentation. Public signed reference delivery is verified; exact runtime compatibility and native warm-plan gameplay adoption remain acceptance work.
+- `scripts/check_publication.py` and `tests/test_publication.py`: prospective/staged source boundary and exact reviewed image/metadata pins. Source-only publication excludes generated game payloads and private player data.
 
-The independent public repository is https://github.com/christianfurr/Kokiri. Initial source commit `bb8c3e4` is published on `feat/kokiri-foundation`; all three CI jobs passed on 2026-11-15. Game-derived code, shader binaries and user data belong outside this source repository. Root owns integration, runtime HUD and exclusive gameplay/GPU testing. Catalog runtime integration continues in a follow-up change.
+The independent public repository is https://github.com/christianfurr/Kokiri. Game-derived code, shader binaries and user data belong outside this source repository. Integration owns accepted source integration, installation/releases and exclusive gameplay/GPU scheduling. Use separate worktrees and owned output paths; preserve shared uncommitted MCP and website work.

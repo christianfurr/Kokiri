@@ -4,9 +4,9 @@ Prepared 2026-11-15. The website contains original branding, app screenshots and
 
 - `kokiri-mark.png`: resized from `assets/brand/kokiri-mark.png`; original generated project mark. See the root brand provenance document.
 - `kokiri-home.png`: resized from `assets/readme/kokiri-home.png`; actual native app capture dated 2026-11-15. See the root screenshot provenance document.
-- `hyrule-field.jpg`: Resized JPEG conversion of the visually inspected `work/oot-crash-20261114/field-ready.png` local diagnostic screenshot. Earlier native runtime capture, not a current Kokiri benchmark.
-- `kakariko.jpg`: resized JPEG of the visually inspected `work/oot-remediation-20261114/remediation-native720-moving/traverse-8ffdadc94e8c-kakariko-before-3febc72b.png` local diagnostic screenshot. Earlier native runtime capture, not a current Kokiri benchmark.
-- `forest.jpg`: original decorative forest artwork generated with the built-in image-generation tool, then JPEG-encoded for the website. It is not a gameplay screenshot. Source image: `exec-53aa6d44-a9f6-4311-8fea-5817dde75e0c.png`.
+- `hyrule-field.jpg`: resized JPEG of a visually inspected Hyrule Field gameplay capture from 2026-11-14. Earlier native runtime capture, not a current Kokiri benchmark.
+- `kakariko.jpg`: resized JPEG of a visually inspected Kakariko gameplay capture from 2026-11-14. Earlier native runtime capture, not a current Kokiri benchmark.
+- `forest.jpg`: original decorative forest artwork generated with the built-in image-generation tool, then JPEG-encoded for the website. It is not a gameplay screenshot.
 
 The overlaid web HUD is an interactive illustration with explicitly labeled sample values. It reflects supported position, size and detail choices, without claiming pixel-identical runtime rendering or measured performance.
 

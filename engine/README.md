@@ -2,9 +2,11 @@
 
 The Legend of Zelda: Ocarina of Time for Nintendo Switch 2 (title `0400486024DEC000`, update `v131072`) as a native Mac app on Apple silicon and macOS 26. The game's ARM64 code runs natively after the repository's offline rewrite; the runtime in this folder supplies the Horizon / NVN services and renders through Metal 4. No CPU emulator is used, and nothing from the game is in this repository: you build the app from your own dump.
 
-**Install:** [docs/install.md](docs/install.md) ([中文](docs/install.zh-CN.md)).
+**Current Kokiri setup:** [Build guide](../BUILDING.md) · [Project status](../STATUS.md) · [中文](docs/install.zh-CN.md).
 
-## Status (Mac, 2026-11-10)
+The settings and runtime notes below remain technical references. The dated 2026-11-10 performance table records an inherited baseline, not current Kokiri measurements. Use the linked Kokiri guides for current build entry points and acceptance.
+
+## Historical baseline (Mac, 2026-11-10)
 
 - Plays on an M4 Mac from the title into Kokiri Forest and the village, with real saves read back on the next start. The whole game has not been played through.
 - Frame rates, Kokiri village, standing still, M4, 100 Hz display, no frame lock:
@@ -17,10 +19,10 @@ The Legend of Zelda: Ocarina of Time for Nintendo Switch 2 (title `0400486024DEC
   | 2K (from 1080p) | 1920×1080 | 61.0 fps | 69.8 fps |
   | 2K (2560×1440 native) | 2560×1440 | 44.8 fps | 45.9 fps |
 
-  The table was measured with the docked quality profile and the end-of-frame network running. In a busier place (about 2,200 draws a frame) at 1080p (native): 44 fps so, 52 fps with the handheld quality profile, 48 fps with the network skipped, 58 fps with both, which are the defaults now.
+  The table was measured with the docked quality profile and the end-of-frame network running. In a busier place (about 2,200 draws a frame) at 1080p (native): 44 fps so, 52 fps with the handheld quality profile, 48 fps with the network skipped, 58 fps with both, which were the defaults in this 2026-11-10 baseline.
   Busier places and new areas are slower; the first visit to a place can stutter briefly.
 - MetalFX frame interpolation works: at 50+50 on a 100 Hz display 595 of 600 game frames got an interpolated frame, about 3.7 ms of GPU each.
-- iPhone and iPad: a build path exists (`--platform ios`) and is being tested; the install page does not cover it yet.
+- The upstream 2026-11-10 notes included an experimental iPhone/iPad path. The current Kokiri builder supports macOS only.
 
 ## Mods and save editing
 
@@ -41,7 +43,9 @@ Key **1** opens the settings panel. The first page:
 
 ## Shaders
 
-A full build translates every shader of the game, compiles all of them into Metal libraries and builds a pipeline archive from the [shader list](assets/shader_list.tsv) (bind states and pipelines players recorded), so the game starts warm. A pipeline no one has recorded yet is built the first time it is drawn, a short stutter; the game writes it to `shader-list-contribution.txt` and, once you answer "Contribute shaders" (asked once before the game starts; a switch in Settings), sends it to the shader inbox on its own. What the inbox collects is merged into the list.
+Full preparation requests shader translation, Metal library compilation and pipeline archives from the [shader metadata list](assets/shader_list.tsv). See [BUILDING.md](../BUILDING.md) for explicit full-mode settings and [STATUS.md](../STATUS.md) for completed stages. Metadata rows do not count compiled shaders, and full v28 preparation has not completed. Pipelines absent from compatible preparation can still compile during play; observed compilation hitches remain unresolved.
+
+Kokiri's [catalog integration](../docs/catalog/integration.md) uses an explicit contribution choice, context validation and a bounded metadata queue. The upstream shader-inbox description from 2026-11-10 is historical; Kokiri catalog population and native cache adoption require separate verification.
 
 ## Known issues
 

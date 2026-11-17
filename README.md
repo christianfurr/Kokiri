@@ -11,7 +11,7 @@ Kokiri brings the **Nintendo Switch 2 edition of Ocarina of Time** to Apple sili
 
 **Development preview.** There is no stable release yet. Full v28 preparation completed for the current private playtest: 42,466 compiled Metal libraries and 28,786 pipelines, including 196 mesh pipelines. The user reports smooth gameplay with occasional new pipeline compilation; broader performance, memory and visual acceptance remain open. The [public metadata catalog](https://catalog.christianfurr.dev) now serves 29,796 signed reference recipes.
 
-[Website & HUD preview](https://christianfurr.github.io/Kokiri/) · [Build and try it](#try-kokiri) · [Report a problem](https://github.com/christianfurr/Kokiri/issues) · [Contribute](CONTRIBUTING.md) · [Catalog integration](docs/catalog/integration.md)
+[Website & HUD preview](https://christianfurr.github.io/Kokiri/) · [Status](STATUS.md) · [Build guide](BUILDING.md) · [Documentation](docs/README.md) · [Report a problem](https://github.com/christianfurr/Kokiri/issues) · [Contribute](CONTRIBUTING.md)
 
 ![Kokiri native Home window](assets/readme/kokiri-home.png)
 
@@ -25,19 +25,19 @@ Actual native app window, captured 2026-11-15 with an existing compatible game b
 - **A configurable performance HUD.** Choose four corners, four sizes and three detail modes. Position, size and detail have been checked in gameplay and persist between launches.
 - **Local session statistics.** Inspect physical memory use, sampled area and optional frame timing. Recordings show their date and build, and observed game rates exclude generated frames.
 
-Kokiri also develops an **open shader and pipeline catalog** that compatible projects can integrate. The launcher's signed-update plumbing uses Sparkle. Production signing, a public feed and end-to-end game-runtime update verification remain pending; updating the launcher alone does not update the game built from your own files.
+Kokiri also develops an **open shader and pipeline catalog** that compatible projects can integrate. The public protocol endpoint responds; a published dataset and verified native adoption remain pending. The launcher's signed-update plumbing uses Sparkle, alongside a separate runtime-source update path that rebuilds from your own assets. Production feeds, distribution signing and actual game update/relaunch/rollback acceptance remain pending.
 
 ## Try Kokiri
 
-This preview currently requires a source build. Start with the requirements below, then follow the [build instructions](#build-from-source). If you already have a compatible game app, the native launcher can connect to it; Kokiri-specific controls require a runtime that supports them.
+Source builds are for contributors while full-v28 preparation and package acceptance continue. Start with the requirements below and the [build guide](BUILDING.md). If you already have a compatible game app, the native launcher can connect to it; Kokiri-specific controls require a runtime that supports them.
 
 | Requirement | Current support |
 | --- | --- |
 | Mac | Apple silicon |
 | Operating system | macOS 26 |
-| Build tools | Xcode; Python 3.14 for the game builder |
+| Build tools | Full Xcode with Metal toolchain; Python 3.14 or later for the game builder |
 | Game input | Your own Nintendo Switch 2 dump, title `0400486024DEC000`, update `131072` |
-| Other inputs | Your own required shared firmware fonts; see the builder instructions |
+| Other inputs | Your own six required shared firmware fonts and manifest; see the [build guide](BUILDING.md) |
 | Distribution | Source preview; no stable, notarized download yet |
 
 **This build does not accept an N64 or Nintendo 3DS ROM.** Game files, firmware fonts and generated game apps are not distributed in this repository.
@@ -56,31 +56,21 @@ After a one-time choice, clients can queue contributions, deduplicate them and r
 
 The first adapter supports the credited runtime's metadata format. Other projects can implement that format or contribute a versioned adapter. [Integration guide](docs/catalog/integration.md) · [Contribution flow](docs/catalog/contributions.md)
 
-Native warm-plan integration is being verified. Its first path accepts ordinary compute/render recipes with locally verified Metal JIT variants. Mesh pipelines and precompiled shader-library installs remain reference-only; the catalog does not yet remove their observed compilation stalls.
+Native warm-plan adoption remains unaccepted. Records with unknown compiler target or effective options stay reference-only. Mesh pipelines and precompiled shader-library installs also remain reference-only; the catalog has no measured stutter-reduction result. See the [integration boundaries](docs/catalog/integration.md).
 
 ## Build from source
 
-Check the [requirements](#try-kokiri) before building. The launcher and the private game app are separate builds.
+Use the [complete build guide](BUILDING.md) for owned inputs, full-preparation settings, storage and concurrency limits. Run these launcher commands from the repository root:
 
 Build the native product app:
 
 ```sh
-cd macos
-bash test.sh
-bash build.sh
-open build/Kokiri.app
+bash macos/test.sh
+bash macos/build.sh
+open macos/build/Kokiri.app
 ```
 
-Build a private game app in an external workspace:
-
-```sh
-python3.14 engine/build.py /path/to/your/dump \
-  --shared-fonts /path/to/your/shared-fonts \
-  --work /path/to/Kokiri-work \
-  -o '/path/to/Kokiri Game.app'
-```
-
-The builder verifies the supported input and rebuilds shader tooling from pinned source. Keep the work folder outside this checkout. See the [Mac app guide](macos/README.md) and [source provenance](engine/docs/kokiri-source-provenance.md).
+The private game app is a separate build through `engine/build.py`. It validates your supported local input and rebuilds shader tooling from pinned source. Keep its work folder and generated app outside this checkout. The launcher build does not complete runtime preparation.
 
 ## Gameplay status and performance
 
@@ -104,8 +94,8 @@ Actual session viewer displaying an earlier v23 recording. The displayed figures
 
 ## Credits and license
 
-MacNativeGames contributors built the native execution, service and graphics foundation. Kokiri retains their MIT copyright and the adjacent dependency notices. Sparkle provides the native updater. The catalog's initial reference dataset preserves its upstream attribution and MIT terms.
+MacNativeGames contributors built the native execution, service and graphics foundation. Kokiri retains their MIT copyright and the adjacent dependency notices. Sparkle provides the native updater. The save workshop derives from Traiver's OOT-SW2SE with Christian Furr's macOS adaptations. The catalog's initial reference dataset preserves its upstream attribution and MIT terms.
 
-[MIT license](LICENSE) · [Engine dependency notices](engine/third_party/COPIES.md) · [Source revisions](engine/docs/kokiri-source-provenance.md)
+[MIT license](LICENSE) · [Credits & third-party notices](THIRD_PARTY_NOTICES.md) · [Engine dependency notices](engine/third_party/COPIES.md) · [Source revisions](engine/docs/kokiri-source-provenance.md)
 
 Kokiri is an independent community project and is not affiliated with Nintendo. Game names identify the supported user-supplied software.

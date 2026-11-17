@@ -1,5 +1,7 @@
 # Local verification — 2026-11-15
 
+Current public reference service and native-download acceptance are recorded in [project status](../../STATUS.md) and [integration](integration.md). The dated implementation/proposal evidence below retains its original scope.
+
 No deployment, remote resource creation, production signing key, real metadata
 upload or GPU/game execution was performed by the catalog implementation.
 
