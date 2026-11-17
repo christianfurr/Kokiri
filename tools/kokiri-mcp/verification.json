@@ -74,13 +74,7 @@
     "19 native CPU tests and syntax checks do not certify full runtime linking, GPU behavior, visual acceptance or physical-controller behavior.",
     "Preview verification includes protected development-root defaults; live game/control acceptance remains separate."
   ],
-  "test_elapsed_seconds": 4.831,
-  "test_groups": {
-    "default_observation": 28,
-    "development_unit": 18,
-    "development_sdk_stdio": 2,
-    "transactional_save": 11
-  },
+  "test_elapsed_seconds": 4.586,
   "native_cpu_verification": {
     "tests_passed": 19,
     "launcher": 6,

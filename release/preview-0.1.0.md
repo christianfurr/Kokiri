@@ -16,4 +16,4 @@ Source and MCP development preview for Apple silicon Macs. This is not a stable 
 
 Existing human saves, caches and uncommitted work remain preserved. Do not relabel v23 caches as v28, overwrite newer progress with an older profile, or infer that source metadata totals count compiled shaders.
 
-The MCP archive includes pinned dependencies and license/attribution files. SHA256SUMS records the exact downloadable archive identity. GitHub also provides the complete tagged source archives. Credentials, logs and game assets belong outside public reports.
+The MCP archive includes a dependency lockfile and license/attribution files. uv downloads the locked SDK dependencies during setup. SHA256SUMS records the exact downloadable archive identity. GitHub also provides the complete tagged source archives. Credentials, logs and game assets belong outside public reports.
