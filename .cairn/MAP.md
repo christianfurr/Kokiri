@@ -1,5 +1,5 @@
 ---
-verified_at_sha: 2ab2da00ceac718cdbd0c344bd3e671c240bae58
+verified_at_sha: e7be679bf065190a246a72b9820790db5b5de3a1
 verified_at: 2026-11-16
 ---
 # Kokiri
@@ -15,6 +15,7 @@ Independent Mac project. [STATUS.md](../STATUS.md) is the dated public acceptanc
 - `LICENSE`: MIT terms preserving upstream copyright.
 - `engine/`: pinned public native runtime, reviewed ownership/mesh/NS2 transfer fixes, standalone build entry. External source-built shader tools use serviced NativeAOT 10.0.14; copied-profile gameplay verification is in progress.
 - `engine/docs/kokiri-startup.md`: original logo startup presentation, real phase/readiness rules and offscreen native view validation.
+- `.cairn/features/2026-11-16-guided-setup/FLOW.md` and `REVIEW.md`: first-run setup, Settings game management, persisted drafts and unavailable-game recovery; native checks and remaining clean-Mac import boundary.
 - `macos/`: SwiftUI Home, Mods loadouts, read-only Saves, profile-aware Play/Settings, preparation counts, public Shader Library and measured session reader with Sparkle updater. `macos/README.md` documents capabilities and configuration. Dated Home/Performance captures and provenance are in `assets/readme/`.
 - `services/catalog/`: open exact-context metadata protocol, Worker/D1 service, quarantine/signing, queue SDK and local tests.
 - `assets/brand/`: original Kokiri logo and generation provenance.

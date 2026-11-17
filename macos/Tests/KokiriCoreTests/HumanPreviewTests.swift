@@ -35,6 +35,21 @@ final class HumanPreviewTests: XCTestCase {
         XCTAssertEqual(ProfileLocation.resolve(previewRequested: false, binding: binding)?.path, KokiriPaths.profile.path)
     }
 
+    @MainActor func testUnavailablePrivatePreviewCannotReadConsentOrEnableCatalog() async {
+        let facade = CatalogFacade.unavailablePreview()
+        XCTAssertFalse(facade.allowsContributions)
+        XCTAssertFalse(facade.configured)
+        XCTAssertFalse(facade.ready)
+        XCTAssertNil(facade.consent)
+        XCTAssertNil(facade.queued)
+        XCTAssertNil(facade.origin)
+        await facade.choose(true)
+        await facade.reload()
+        XCTAssertNil(facade.consent)
+        XCTAssertFalse(facade.ready)
+        XCTAssertFalse(facade.choicePending)
+    }
+
     func testInvalidBindingCannotResolveToOrdinaryProfile() throws {
         let value = try fixture()
         for file in [value.base.appendingPathComponent("missing.json"), value.file] {

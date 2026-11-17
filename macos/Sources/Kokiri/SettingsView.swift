@@ -6,7 +6,15 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Game and saves") {
-                LabeledContent("Connected game", value: model.installation?.app.lastPathComponent ?? "Not connected")
+                LabeledContent("Connected game", value: model.preferences.installation?.app.lastPathComponent ?? model.installation?.app.lastPathComponent ?? "Not connected")
+                if model.installationUnavailable { Text("Game unavailable. Reconnect its drive or locate the app.").foregroundStyle(.secondary) }
+                if !model.isPlaytest {
+                    Menu("Manage Game…") {
+                        Button(model.installationUnavailable ? "Locate Game…" : "Connect Another Game…", action: model.chooseInstallation)
+                        Button("Prepare from Game Files…", action: model.beginSetup)
+                        if let app = model.preferences.installation?.app { Button("Show in Finder") { model.reveal(app) } }
+                    }.disabled(!model.canManageGame)
+                }
                 LabeledContent("Player profile", value: model.profileFolder?.path ?? "Connected player profile unavailable").textSelection(.enabled)
                 Text("Kokiri uses a separate profile. Import copies the complete selected folder; it never replaces an existing Kokiri profile.").font(.caption).foregroundStyle(.secondary)
                 HStack {

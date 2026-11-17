@@ -1,5 +1,7 @@
 # Signed shell releases
 
+Explicit experimental manual-download previews may ship an ad-hoc-signed launcher ZIP with source identity, checksums and clear unnotarized status. They must pass bundle/archive payload admission and strict signature verification. They do not use the production appcast path below, relax its requirements, or include game content. See [Preview 2](preview-0.1.0-2.md).
+
 `prepare.py` creates a signed Sparkle archive, signed appcast, optional signed
 delta and public verification receipt. It never uploads files, installs an
 update, creates a production signing key or changes Keychain entries.
@@ -83,7 +85,7 @@ Production preparation refuses ad-hoc apps. Before using it, a maintainer must:
    requires strict deep signature verification, the Developer ID authority,
    hardened runtime, successful stapler validation and Gatekeeper assessment.
    Developer ID Application credentials and a notarized Kokiri distribution
-   are currently missing. This repository's ad-hoc preview is not releasable.
+   are currently missing. An ad-hoc preview is not eligible for this production update pipeline.
 5. Configure the final HTTPS artifact host and feed URL, and complete a real
    update/relaunch test on disposable app copies before enabling publication.
    The tooling below prepares files locally. It contains no publishing command.

@@ -6,14 +6,13 @@ import UniformTypeIdentifiers
 import CryptoKit
 
 enum Destination: String, CaseIterable, Identifiable {
-    case home = "Home", mods = "Mods", saves = "Saves", setup = "Setup", performance = "Performance", shaders = "Shader Library", settings = "Settings"
+    case home = "Home", mods = "Mods", saves = "Saves", performance = "Performance", shaders = "Shader Library", settings = "Settings"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .home: "leaf"
         case .mods: "shippingbox"
         case .saves: "externaldrive"
-        case .setup: "shippingbox"
         case .performance: "waveform.path.ecg"
         case .shaders: "square.stack.3d.up"
         case .settings: "slider.horizontal.3"
@@ -37,6 +36,17 @@ enum Destination: String, CaseIterable, Identifiable {
     @Published var preparation: RuntimePreparation?
     @Published var shaderRefreshPending = false
     @Published var buildOutput = ""
+    @Published var onboarding = false
+    @Published var setupPresented = false
+    @Published var installationUnavailable = false
+    @Published var setupReady = false
+    @Published var setupStep = -1 { didSet { persistSetupDraft() } }
+    @Published var setupGame: URL? { didSet { persistSetupDraft() } }
+    @Published var setupFonts: URL? { didSet { persistSetupDraft() } }
+    @Published var setupGameProblem: String?
+    @Published var setupFontsProblem: String?
+    @Published var setupWork = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Kokiri/Preparation") { didSet { persistSetupDraft() } }
+    @Published var setupOutput = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Kokiri Game.app") { didSet { persistSetupDraft() } }
     @Published var buildStage = "Not started"
     @Published var building = false
     @Published var buildSucceeded = false
@@ -45,6 +55,7 @@ enum Destination: String, CaseIterable, Identifiable {
     let catalog: CatalogFacade
     let mods = ModsModel()
 
+    private var loadingSetupDraft = true
     private let preferenceFile = KokiriPaths.support.appendingPathComponent("launcher.json")
     private let humanPreview: HumanPreviewBinding?
     private let humanPreviewRequested: Bool
@@ -84,15 +95,25 @@ enum Destination: String, CaseIterable, Identifiable {
         }
         if let binding {
             catalog = CatalogFacade(store: binding.rootURL.appendingPathComponent("Catalog"), allowsContributions: false)
-        } else {
-            catalog = CatalogFacade(store: KokiriPaths.support.appendingPathComponent("Catalog"),
-                                    allowsContributions: !humanPreviewRequested)
-        }
+        } else if humanPreviewRequested {
+            catalog = CatalogFacade.unavailablePreview()
+        } else { catalog = CatalogFacade() }
         hud = binding.map { HUDPreferences.read(from: $0.settingsURL) }
             ?? (humanPreviewRequested ? HUDPreferences() : HUDPreferences.read(from: KokiriPaths.game))
         lastProfileFolder = ProfileLocation.resolve(previewRequested: humanPreviewRequested, binding: binding)
         catalogObservation = catalog.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         modsObservation = mods.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        if !humanPreviewRequested, let data = try? Data(contentsOf: KokiriPaths.support.appendingPathComponent("setup-draft.json")),
+           let draft = try? JSONDecoder().decode(SetupDraft.self, from: data) {
+            setupGame = draft.game; setupFonts = draft.fonts; setupWork = draft.work; setupOutput = draft.output
+            setupStep = min(2, max(-1, draft.step))
+            setupGameProblem = draft.game.flatMap(SetupInput.gameProblem)
+            setupFontsProblem = draft.fonts.flatMap(SetupInput.fontsProblem)
+            if setupGameProblem != nil || (setupStep > 0 && setupGame == nil) { setupStep = 0 }
+            else if setupFontsProblem != nil || (setupStep > 1 && setupFonts == nil) { setupStep = 1 }
+        }
+        loadingSetupDraft = false
+        onboarding = !humanPreviewRequested && preferences.installation == nil
         refreshInstallation()
         if let binding {
             sessionFolder = binding.rootURL
@@ -131,13 +152,15 @@ enum Destination: String, CaseIterable, Identifiable {
             guard profileFolder != nil else { return nil }
             return humanPreview.flatMap { try? GameInstallation.inspect($0.appURL) }
         }
-        return preferences.installation
+        return installationUnavailable ? nil : preferences.installation
     }
+    var canManageGame: Bool { !isPlaytest && !busy && !building && !mods.busy && !anyGameRunning }
     var supportsHUD: Bool { installation.flatMap { Bundle(url: $0.app)?.object(forInfoDictionaryKey: "KokiriHUDPreferencesVersion") as? Int } == 1 }
     var stateTitle: String {
         if running, activeInstallation?.supportsLiveStatus != true { return "Game running" }
         if running { return connected ? "Session connected" : "Starting game" }
         if anyGameRunning { return "Another game session is open" }
+        if installationUnavailable { return "Game unavailable" }
         return installation == nil ? "Set up your game" : "Ready to launch"
     }
     var isStale: Bool { !running || timingUpdatedAt.map { Date().timeIntervalSince($0) > 5 } ?? true }
@@ -149,8 +172,12 @@ enum Destination: String, CaseIterable, Identifiable {
     func refreshInstallation() {
         if humanPreviewRequested { refreshShaders(); refreshModsContext(); return }
         if let selected = preferences.installation {
-            do { preferences.installation = try GameInstallation.inspect(selected.app) }
-            catch { preferences.installation = nil; message = error.localizedDescription }
+            do {
+                preferences.installation = try GameInstallation.inspect(selected.app)
+                if installationUnavailable { message = nil }
+                installationUnavailable = false
+            }
+            catch { installationUnavailable = true; message = "Your connected game could not be opened. Locate it or reconnect its drive, then try again." }
         }
         refreshShaders()
         refreshModsContext()
@@ -161,17 +188,42 @@ enum Destination: String, CaseIterable, Identifiable {
                         gameRunning: modsContextGameRunning,
                         launchSupported: !humanPreviewRequested)
     }
+    private func persistSetupDraft() {
+        guard !loadingSetupDraft, !humanPreviewRequested else { return }
+        let draft = SetupDraft(step: setupStep, game: setupGame, fonts: setupFonts, work: setupWork, output: setupOutput)
+        do {
+            try FileManager.default.createDirectory(at: KokiriPaths.support, withIntermediateDirectories: true)
+            try JSONEncoder().encode(draft).write(to: KokiriPaths.support.appendingPathComponent("setup-draft.json"), options: .atomic)
+        } catch { message = "Setup choices could not be saved. Keep Kokiri open to retain your selections." }
+    }
+    func beginSetup() {
+        guard canManageGame else { return }
+        setupReady = false
+        setupPresented = true
+    }
+    func finishSetup() {
+        guard !building else { return }
+        onboarding = false; setupPresented = false; setupReady = false; selection = .home
+        if installation != nil { setupStep = -1 }
+    }
+    func connectInstallation(_ url: URL) {
+        guard canManageGame else { return }
+        do {
+            preferences = try InstallationConnection.connect(url, preferences: preferences, savingTo: preferenceFile)
+            installationUnavailable = false
+            refreshShaders(); setupReady = onboarding || setupPresented
+            refreshModsContext()
+            message = nil
+        } catch { message = error.localizedDescription }
+    }
     func chooseInstallation() {
+        guard canManageGame else { return }
         guard !humanPreviewRequested else { message = "This playtest uses the prepared Kokiri game."; return }
         let panel = NSOpenPanel(); panel.title = "Connect your game"; panel.prompt = "Connect Game"
         panel.allowedContentTypes = [.applicationBundle]; panel.canChooseDirectories = false
         panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            preferences.installation = try GameInstallation.inspect(url); savePreferences(); refreshShaders()
-            refreshModsContext()
-            message = "Game connected. Kokiri uses its own player profile."
-        } catch { message = error.localizedDescription }
+        connectInstallation(url)
     }
     func chooseRepository() {
         guard !humanPreviewRequested else { return }
@@ -222,7 +274,7 @@ enum Destination: String, CaseIterable, Identifiable {
         if reconnectHumanPreview() { runtime?.activate(options: [.activateAllWindows]); return }
         guard !anyGameRunning else { message = "Another game session is running. Finish it before starting Kokiri’s profile."; return }
         if humanPreviewRequested { playHumanPreview(); return }
-        guard let selected = installation else { selection = .setup; return }
+        guard let selected = installation else { if installationUnavailable { refreshInstallation() } else { beginSetup() }; return }
         busy = true
         refreshModsContext()
         Task {
@@ -469,6 +521,31 @@ enum Destination: String, CaseIterable, Identifiable {
         guard !busy, !building else { return }
         guard !anyGameRunning else { message = "Close the game before building."; return }
         guard let repository = preferences.repository else { message = "Choose the Kokiri source folder first."; return }
+        guard !FileManager.default.fileExists(atPath: output.path) else {
+            message = "Choose a new game app location. Your existing app will stay in place."; return
+        }
+        guard SetupInput.gameProblem(game) == nil, SetupInput.fontsProblem(fonts) == nil else {
+            message = "Your input files have changed. Choose the game and fonts again."; return
+        }
+        guard SetupInput.isOutside(work, repository), SetupInput.isOutside(output, repository),
+              SetupInput.isOutside(work, game), SetupInput.isOutside(output, game),
+              SetupInput.isOutside(game, work), SetupInput.isOutside(fonts, work),
+              SetupInput.isOutside(output, work), SetupInput.isOutside(work, output),
+              SetupInput.isOutside(work, fonts), SetupInput.isOutside(output, fonts), SetupInput.isOutside(fonts, output) else {
+            message = "Choose separate preparation and game locations outside your source and input folders."; return
+        }
+        var volume = work
+        while !FileManager.default.fileExists(atPath: volume.path), volume.path != "/" { volume.deleteLastPathComponent() }
+        if !FileManager.default.fileExists(atPath: work.appendingPathComponent("oot/extracted/oot/romfs/romfs.bin").path),
+           let bytes = (try? FileManager.default.attributesOfFileSystem(forPath: volume.path)[.systemFreeSize]) as? NSNumber,
+           bytes.int64Value < 40 * 1024 * 1024 * 1024 {
+            message = "The preparation drive needs at least 40 GiB free for the initial import."; return
+        }
+        let metal = Process()
+        metal.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun"); metal.arguments = ["--find", "metal"]
+        metal.standardOutput = FileHandle.nullDevice; metal.standardError = FileHandle.nullDevice
+        do { try metal.run(); metal.waitUntilExit() } catch { message = "Install Xcode and its Metal toolchain before preparing the game."; return }
+        guard metal.terminationStatus == 0 else { message = "Install Xcode’s Metal toolchain before preparing the game."; return }
         guard !work.standardizedFileURL.path.hasPrefix(repository.standardizedFileURL.path + "/"),
               work.standardizedFileURL != repository.standardizedFileURL,
               !output.standardizedFileURL.path.hasPrefix(repository.standardizedFileURL.path + "/") else {
@@ -483,6 +560,11 @@ enum Destination: String, CaseIterable, Identifiable {
         let process = Process(), pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: python)
         process.arguments = ["-I", entry.path, game.path, "--shared-fonts", fonts.path, "--work", work.path, "-o", output.path]
+        var environment = ProcessInfo.processInfo.environment
+        environment["OOT_SHADERS"] = "full"
+        environment["OOT_SHADER_SUBSET"] = "all"
+        environment["OOT_BUNDLE_SHADERS"] = "1"
+        process.environment = environment
         process.currentDirectoryURL = repository; process.standardOutput = pipe; process.standardError = pipe
         buildOutput = ""; buildStage = "Starting verified build"; buildSucceeded = false
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -495,11 +577,11 @@ enum Destination: String, CaseIterable, Identifiable {
             Task { @MainActor in
                 guard let self else { return }
                 self.building = false; self.buildProcess = nil
-                self.buildSucceeded = finished.terminationStatus == 0
+                self.buildSucceeded = false
                 if finished.terminationStatus == 0 {
                     do {
-                        self.preferences.installation = try GameInstallation.inspect(output)
-                        self.savePreferences(); self.refreshShaders(); self.buildStage = "Game built and connected"
+                        self.preferences = try InstallationConnection.connect(output, preferences: self.preferences, savingTo: self.preferenceFile)
+                        self.installationUnavailable = false; self.setupReady = true; self.refreshShaders(); self.refreshModsContext(); self.buildSucceeded = true; self.buildStage = "Game built and connected"
                     } catch { self.buildStage = "Build ended; app verification failed"; self.message = error.localizedDescription }
                 } else { self.buildStage = "Build stopped (exit \(finished.terminationStatus))" }
             }
