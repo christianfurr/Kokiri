@@ -23,10 +23,10 @@ import KokiriCore
     var selectedPacks: [ModPack] { state.orderedPacks }
     var macNativeAvailable: Bool { FileManager.default.isReadableFile(atPath: ModLibrary.macNativeLibrary.appendingPathComponent("library.json").path) }
 
-    func setContext(installation: GameInstallation?, gameDataFolder: URL, gameRunning: Bool, launchSupported: Bool = true) {
+    func setContext(installation: GameInstallation?, gameRunning: Bool, launchSupported: Bool = true) {
         self.installation = installation
         self.gameRunning = gameRunning
-        if !launchSupported { launchBlocker = "This connected preview does not support launching mod profiles yet. You can organize profiles here; Play continues without mods." }
+        if !launchSupported { launchBlocker = "This preview doesn’t launch mods. Play continues without mods." }
         else if let installation { launchBlocker = ModLibrary.launchBlocker(app: installation.app) }
         else { launchBlocker = "Connect a game in Setup before playing with mods." }
     }

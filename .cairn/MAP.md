@@ -1,5 +1,5 @@
 ---
-verified_at_sha: 696fe3f7adc52a3ba398be26bfefb79c6c335d8b
+verified_at_sha: 2ab2da00ceac718cdbd0c344bd3e671c240bae58
 verified_at: 2026-11-16
 ---
 # Kokiri

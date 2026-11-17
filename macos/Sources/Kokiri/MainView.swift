@@ -77,11 +77,11 @@ struct HomeView: View {
                     Surface {
                         VStack(alignment: .leading, spacing: 14) {
                             Label("Your saves", systemImage: "externaldrive").font(.system(size: 14, weight: .semibold))
-                            Text("Play continues with the connected profile. Your original saves stay in place.")
+                            Text(model.profileFolder == nil ? "The connected player profile is unavailable." : "Play continues with the connected profile. Your original saves stay in place.")
                                 .font(.system(size: 12)).foregroundStyle(.secondary)
                             HStack {
                                 Button("View Saves") { model.selection = .saves }
-                                Button("Show in Finder") { model.reveal(model.profileFolder) }
+                                Button("Show in Finder", action: model.revealProfile).disabled(model.profileFolder == nil)
                                 if model.canImportProfile { Button("Import Profile…", action: model.importProfile) }
                             }
                         }

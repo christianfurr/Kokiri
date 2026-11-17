@@ -49,7 +49,10 @@ enum Destination: String, CaseIterable, Identifiable {
     private let humanPreview: HumanPreviewBinding?
     private let humanPreviewRequested: Bool
     private var humanPreviewError: String?
-    private var hudFolder: URL { humanPreview?.settingsURL ?? KokiriPaths.game }
+    private var hudFolder: URL? {
+        humanPreviewRequested ? gameDataFolder?.appendingPathComponent("settings/game") : KokiriPaths.game
+    }
+    private var lastProfileFolder: URL?
     private var sampleStart: UInt64?
     private var activeInstallation: GameInstallation?
     private var tails: [String: LineTail] = [:]
@@ -82,7 +85,9 @@ enum Destination: String, CaseIterable, Identifiable {
         if let binding {
             catalog = CatalogFacade(store: binding.rootURL.appendingPathComponent("Catalog"), allowsContributions: false)
         } else { catalog = CatalogFacade() }
-        hud = HUDPreferences.read(from: binding?.settingsURL ?? KokiriPaths.game)
+        hud = binding.map { HUDPreferences.read(from: $0.settingsURL) }
+            ?? (humanPreviewRequested ? HUDPreferences() : HUDPreferences.read(from: KokiriPaths.game))
+        lastProfileFolder = ProfileLocation.resolve(previewRequested: humanPreviewRequested, binding: binding)
         catalogObservation = catalog.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         modsObservation = mods.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         refreshInstallation()
@@ -108,8 +113,8 @@ enum Destination: String, CaseIterable, Identifiable {
     }
 
     var isPlaytest: Bool { humanPreviewRequested }
-    var profileFolder: URL { humanPreview?.rootURL.appendingPathComponent("profile") ?? KokiriPaths.profile }
-    var gameDataFolder: URL { humanPreview?.rootURL ?? KokiriPaths.game }
+    var profileFolder: URL? { ProfileLocation.resolve(previewRequested: humanPreviewRequested, binding: humanPreview) }
+    var gameDataFolder: URL? { humanPreviewRequested ? profileFolder?.deletingLastPathComponent() : KokiriPaths.game }
     var canImportProfile: Bool { !humanPreviewRequested && !busy && !anyGameRunning }
     var collectedRecipeCount: Int { collectedShaderCounts.values.reduce(0, +) }
     var running: Bool { runtime?.isTerminated == false }
@@ -119,7 +124,10 @@ enum Destination: String, CaseIterable, Identifiable {
         }
     }
     var installation: GameInstallation? {
-        if humanPreviewRequested { return humanPreview.flatMap { try? GameInstallation.inspect($0.appURL) } }
+        if humanPreviewRequested {
+            guard profileFolder != nil else { return nil }
+            return humanPreview.flatMap { try? GameInstallation.inspect($0.appURL) }
+        }
         return preferences.installation
     }
     var supportsHUD: Bool { installation.flatMap { Bundle(url: $0.app)?.object(forInfoDictionaryKey: "KokiriHUDPreferencesVersion") as? Int } == 1 }
@@ -146,7 +154,7 @@ enum Destination: String, CaseIterable, Identifiable {
     }
     func refreshModsContext() {
         modsContextGameRunning = anyGameRunning
-        mods.setContext(installation: installation, gameDataFolder: gameDataFolder,
+        mods.setContext(installation: installation,
                         gameRunning: modsContextGameRunning,
                         launchSupported: !humanPreviewRequested)
     }
@@ -177,6 +185,14 @@ enum Destination: String, CaseIterable, Identifiable {
         return panel.runModal() == .OK ? panel.url : nil
     }
     func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+    func revealProfile() {
+        guard let folder = profileFolder else { message = "The connected player profile is unavailable."; return }
+        reveal(folder)
+    }
+    func revealGameData() {
+        guard let folder = gameDataFolder else { message = "The connected game data is unavailable."; return }
+        reveal(folder)
+    }
     func importProfile() {
         guard !humanPreviewRequested else { message = "Your copied player profile is already connected."; return }
         guard !busy, !building else { return }
@@ -225,7 +241,8 @@ enum Destination: String, CaseIterable, Identifiable {
                                    "TOTK_GAME_SLOT_DIR": KokiriPaths.sharedSlot.path,
                                    "TOTK_INPUT_FILE": input.path, "OOT_EDITOR_STATUS": status.path,
                                    "TOTK_CLOUD_SAVE_DIR": "0"]
-                environment.merge(try await mods.prepareLaunch(app: verified.app, gameDataFolder: gameDataFolder, sessionFolder: folder)) { _, new in new }
+                guard let dataFolder = gameDataFolder else { throw KokiriError.message("The connected game data is unavailable.") }
+                environment.merge(try await mods.prepareLaunch(app: verified.app, gameDataFolder: dataFolder, sessionFolder: folder)) { _, new in new }
                 if preferences.observeSessions {
                     environment["DM_NVN_TSV"] = folder.appendingPathComponent("timings.tsv").path
                     environment["DM_NVN_TSV_CALLS"] = "0"
@@ -332,6 +349,12 @@ enum Destination: String, CaseIterable, Identifiable {
     }
 
     private func tick() {
+        let currentProfile = profileFolder
+        if currentProfile != lastProfileFolder {
+            lastProfileFolder = currentProfile
+            objectWillChange.send()
+            refreshModsContext()
+        }
         if anyGameRunning != modsContextGameRunning { refreshModsContext() }
         guard let runtime else { return }
         if runtime.isTerminated {
@@ -408,7 +431,7 @@ enum Destination: String, CaseIterable, Identifiable {
         Task { await catalog.choose(choice) }
     }
     func updateHUD(_ change: (inout HUDPreferences) -> Void) {
-        guard supportsHUD, !anyGameRunning else { message = "Close the matching Kokiri game before changing its HUD."; return }
+        guard supportsHUD, !anyGameRunning, let hudFolder else { message = "Close the matching Kokiri game before changing its HUD."; return }
         var value = HUDPreferences.read(from: hudFolder); change(&value)
         do { try value.save(to: hudFolder); hud = value }
         catch { message = error.localizedDescription }
@@ -417,7 +440,11 @@ enum Destination: String, CaseIterable, Identifiable {
         catalog.selectRuntime(installation?.app)
         guard !shaderRefreshPending else { return }
         let app = installation?.app
-        let cache = humanPreview?.rootURL.appendingPathComponent("cache") ?? KokiriPaths.game.appendingPathComponent("shader-cache")
+        guard let dataFolder = gameDataFolder else {
+            shaderCounts = [:]; collectedShaderCounts = [:]; preparation = nil
+            return
+        }
+        let cache = humanPreviewRequested ? dataFolder.appendingPathComponent("cache") : dataFolder.appendingPathComponent("shader-cache")
         shaderRefreshPending = true
         Task {
             let result = await Task.detached(priority: .utility) {

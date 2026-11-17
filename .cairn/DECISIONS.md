@@ -1,5 +1,7 @@
 # Decisions
 
+- 2026-11-16: User selected Compact split for Mods/Saves, then requested MacNative Mods as the Mods interface reference. Use a compact table and inspector for mods, slot list and preview for saves, with secondary details collapsed. Invalid requested private bindings fail closed instead of falling back to ordinary player data.
+
 - 2026-11-16: Mods and Saves are separate native app destinations. Kokiri copies compatible MacNative Mods packs into its own library and keeps mod loadout profiles separate from player save profiles. Saves is a read-only view of the exact connected profile. The accepted private runtime currently disables mods, so this app feature exposes that limitation; any private runtime capability upgrade is separate work.
 
 - 2026-11-16: Published 29,796 signed v28 reference recipes in 233 packs at catalog.christianfurr.dev after actual host staging, backup/restore rehearsal and anonymous HTTPS verification. Ingestion stays disabled; compiled binaries, saves and logs remain private. The connected launcher preserves the existing human profile and can reconnect observation only to its exact acknowledged process.
