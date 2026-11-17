@@ -535,6 +535,28 @@ def pipeline_archive_snapshot(folder):
     return dict(sha256=hashlib.sha256(encoded).hexdigest(),entries=len(entries),
                 bytes=sum(entry['identity'][2] for entry in entries.values() if entry['kind']=='file'))
 
+def pipeline_list_admission(lists):
+    """Keep native-parser rejections separate from successful pipeline requests."""
+    prefix=oot_shader_list().ADMISSION_PREFIX
+    records={}
+    for path in lists:
+        headers=[line[len(prefix):] for line in path.read_text().splitlines() if line.startswith(prefix)]
+        if not headers:continue   # Lists without a rejection ledger retain the exact coverage gate.
+        if len(headers)!=1:raise ValueError('duplicate pipeline list admission header: '+str(path))
+        value=json.loads(headers[0])
+        if (not isinstance(value,dict) or value.get('schema')!='kokiri-pipeline-list-admission-v1' or
+            not isinstance(value.get('source_sha256'),str) or not re.fullmatch('[0-9a-f]{64}',value['source_sha256']) or
+            not isinstance(value.get('rejected_host_rows'),list)):
+            raise ValueError('invalid pipeline list admission metadata: '+str(path))
+        for row in value['rejected_host_rows']:
+            if (not isinstance(row,dict) or row.get('reason')!='PSO_HOST_BITS' or row.get('kind') not in ('R','B','T','M') or
+                type(row.get('host_bits')) is not int or row['host_bits'] not in (0x40,0x80,0xc0) or
+                not isinstance(row.get('input_canonical_row_sha256'),str) or
+                not re.fullmatch('[0-9a-f]{64}',row['input_canonical_row_sha256'])):
+                raise ValueError('invalid rejected pipeline row provenance: '+str(path))
+        records[path.name]=value
+    return records
+
 def compute_pipeline_archive(work, tree, lists, mode='full', *, verify_only=False):
     """Build every seed compute pipeline and, with them, the render pipelines the App's warm-up lists name (lists: the
     pso_title.tsv / pso_manifest.tsv resolve_lists made from the current games/oot/assets/shader_list.tsv, the files the
@@ -564,6 +586,7 @@ def compute_pipeline_archive(work, tree, lists, mode='full', *, verify_only=Fals
         log=logs/'verify-pipelines.log'
     input_lists=tuple(lists)
     lists_sha256={p.name:sha(p) for p in input_lists}   # check_archive_lists compares them with the files the App carries
+    admission=pipeline_list_admission(input_lists)
     lists=[p for p in lists if p.is_file() and any(l and not l.startswith('#') for l in p.read_text().splitlines())]
     render_rows=sum(1 for p in lists for l in p.read_text().splitlines() if l.startswith(RENDER_ROWS))
     mesh_rows=sum(1 for p in lists for l in p.read_text().splitlines() if l.startswith(MESH_ROWS))
@@ -591,6 +614,7 @@ def compute_pipeline_archive(work, tree, lists, mode='full', *, verify_only=Fals
     if any(type(report.get(k)) is not int or report[k]<0 for k in ('render','compute','mesh','kept','failed','write_failed')):
         raise ValueError('pipeline archive has missing or invalid completion counters')
     completed=sum(report[k] for k in ('render','compute','mesh','kept'))
+    report.update(native_exit_code=tool.returncode,requested=requested,completed=completed)
     if tool.returncode or report['write_failed'] or report['failed'] or completed != requested:
         raise ValueError('incomplete pipeline archive: '+str(report))
     if verify_only:
@@ -615,6 +639,7 @@ def compute_pipeline_archive(work, tree, lists, mode='full', *, verify_only=Fals
     report.update(planned=len(rows),listed_render=render_rows,listed_mesh=mesh_rows,mesh_indexed=mesh_indexed,lists=[p.name for p in lists],lists_sha256=lists_sha256,indexed=count,chain=chain,
                   plan_sha256=plan_sha256,runtime_sha256=runtime_sha256,
                   requested=requested,completed=completed,
+                  pipeline_list_admission=admission,
                   **library_inputs,
                   library_input_binding=('native-read final manifest and strict fresh-process zero-JIT archive verification' if verify_only else
                                          'intended manifest snapshot; actual library use and zero-JIT proof are not established by this record'),

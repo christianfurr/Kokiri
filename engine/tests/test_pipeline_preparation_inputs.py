@@ -75,12 +75,17 @@ class PipelinePreparationInputsTests(unittest.TestCase):
                     build.pipeline_library_inputs(libraries)
 
     def run_archive(self,mode,change=None,*,verify_only=False,overrides=None,archive_change=False,
-                    runtime_change=False,request_change=False,expected_error=None):
+                    runtime_change=False,request_change=False,expected_error=None,
+                    native_returncode=0,admission_metadata=None):
         libraries,path=self.manifest(mode)
         native=self.work/'build/oot-native';native.parent.mkdir(parents=True,exist_ok=True)
         native.write_bytes(b'CPU fixture only')
         lists=[self.root/'pso_title.tsv',self.root/'pso_manifest.tsv']
-        for listed in lists:listed.write_text('# no render or mesh rows\n')
+        for listed in lists:
+            text='# no render or mesh rows\n'
+            if admission_metadata and listed.name in admission_metadata:
+                text+='# Kokiri pipeline admission: '+json.dumps(admission_metadata[listed.name])+'\n'
+            listed.write_text(text)
         row='C\tfixture_compute_b';key='c'+hashlib.sha256(row[2:].encode()).hexdigest()[:40]
         cache=self.tree/'build/compute-pipelines/fixture-v28'
         archive=cache/'pipelines/fixture.metalarchive'
@@ -101,7 +106,7 @@ class PipelinePreparationInputsTests(unittest.TestCase):
             if request_change:lists[0].write_text('# changed request snapshot\n')
             if change is not None:change(path)
             kwargs['stdout'].write(json.dumps(report)+'\n')
-            return subprocess.CompletedProcess(args[0],0)
+            return subprocess.CompletedProcess(args[0],native_returncode)
         def fake_copy(made,target,arch,chain):
             target.mkdir(parents=True)
             (target/f'pipelines-{arch}.tsv').write_text(key+'\tfixture\n')
@@ -130,6 +135,7 @@ class PipelinePreparationInputsTests(unittest.TestCase):
             self.assertTrue(report['verification_process_fresh'])
             self.assertEqual(report['archive_snapshot_before_sha256'],report['archive_snapshot_after_sha256'])
             self.assertEqual(report['verification_runtime_sha256'],build.sha(native))
+        return report
 
     def test_unchanged_full_inputs_are_accepted_and_recorded(self):
         self.run_archive('full')
@@ -161,6 +167,34 @@ class PipelinePreparationInputsTests(unittest.TestCase):
 
     def test_native_failure_counter_cannot_hide_behind_successful_counts(self):
         self.run_archive('full',verify_only=True,overrides={'failed':1},expected_error='incomplete pipeline archive')
+
+    def test_nonzero_native_exit_rejects_otherwise_complete_request_counts(self):
+        self.run_archive('full',native_returncode=7,expected_error='incomplete pipeline archive')
+
+    def test_zero_native_exit_does_not_excuse_a_missing_admitted_request(self):
+        self.run_archive('full',overrides={'compute':0},expected_error='incomplete pipeline archive')
+
+    def test_saved_admission_metadata_preserves_strict_request_accounting(self):
+        admission={
+            'pso_title.tsv':dict(schema='kokiri-pipeline-list-admission-v1',source_sha256='a'*64,
+                                 rejected_host_rows=[]),
+            'pso_manifest.tsv':dict(schema='kokiri-pipeline-list-admission-v1',source_sha256='b'*64,
+                rejected_host_rows=[dict(reason='PSO_HOST_BITS',kind='R',host_bits=64,
+                                         input_canonical_row_sha256='b'*64)])}
+        for verify_only in (False,True):
+            with self.subTest(verify_only=verify_only):
+                self.tree=self.root/('verify' if verify_only else 'update')
+                self.work=self.root/('verify-work' if verify_only else 'update-work')
+                report=self.run_archive('full',verify_only=verify_only,admission_metadata=admission)
+                self.assertEqual(report['pipeline_list_admission'],admission)
+                self.assertEqual((report['requested'],report['completed'],report['native_exit_code']),(1,1,0))
+
+    def test_rejected_host_row_metadata_cannot_waive_a_missing_admitted_request(self):
+        admission={'pso_manifest.tsv':dict(schema='kokiri-pipeline-list-admission-v1',source_sha256='b'*64,
+                   rejected_host_rows=[dict(reason='PSO_HOST_BITS',kind='R',host_bits=64,
+                                            input_canonical_row_sha256='b'*64)])}
+        self.run_archive('full',admission_metadata=admission,overrides={'compute':0},
+                         expected_error='incomplete pipeline archive')
 
     def test_no_actual_archive_reopened_is_rejected(self):
         self.run_archive('full',verify_only=True,overrides={'archive_files_opened':0},expected_error='reopen evidence')

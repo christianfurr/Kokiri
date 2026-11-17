@@ -131,6 +131,18 @@ def locator(fields):
 # nvn_pso_skey.h pso_skey as the runtime writes it (544 bytes): merged flag, colour formats, blend enables, write masks and
 # one 8-byte blend state per colour target
 SKEY_SIZE, SKEY_MERGED, SKEY_CFMT, SKEY_BLEND_EN, SKEY_CHMASK, SKEY_BLEND = 544, 162, 216, 260, 264, 272
+SKEY_A2C, PSO_HOST_BITS = 268, 0xc0   # nvn_pso_skey.h: host rectangle/output functions are never archived
+ADMISSION_PREFIX = '# Kokiri pipeline admission: '
+
+
+def host_pipeline_bits(row):
+    """Match the native parser's host-only rejection without rewriting the recorded key."""
+    if row[0] not in ('R', 'B', 'T', 'M'):
+        return 0
+    key = row[2] if row[0] == 'M' else row[1]
+    if len(key) != 2 * SKEY_SIZE:
+        return 0   # Other unsupported shapes still fail the existing pipeline coverage gate.
+    return struct.unpack_from('<I', bytes.fromhex(key), SKEY_A2C)[0] & PSO_HOST_BITS
 
 
 def pipeline_key(key):
@@ -413,7 +425,8 @@ class ShaderList:
     def resolve(self, seed, flag, given=()):
         """The warm rows carrying this flag for the game version of a seed folder, each variant named as the seed serves
         its bind state, without those in given (rows resolved before) and those naming a shader of another version
-        (neither in the seed's shader-keys.json nor in the seed) or one the seed cannot build. Returns rows and counts."""
+        (neither in the seed's shader-keys.json nor in the seed) or one the seed cannot build. Native-rejected host-only
+        pipeline records remain in the source list and return in counts['rejected_host_rows'], never as archive requests."""
         from prepare_shader_seed import deps_match   # it imports this module
         seed = Path(seed)
         keys = set(json.loads((seed/'shader-keys.json').read_text())['keys'])
@@ -445,9 +458,14 @@ class ShaderList:
                     hit = next((r['variant'] for r in mine if deps_match(r.get('deps') or {}, answers)), None)
                     names[name] = hit+'_b' if hit else None
             return names[name]
-        out, seen, counts = [], set(given), dict(other=0, missing=0, renamed=0, merged=0)
+        out, seen, counts = [], set(given), dict(other=0, missing=0, renamed=0, merged=0, rejected_host_rows=[])
         for row, have in self.warm.items():
             if flag not in have:
+                continue
+            host_bits = host_pipeline_bits(row)
+            if host_bits:
+                counts['rejected_host_rows'].append(dict(reason='PSO_HOST_BITS', kind=row[0], host_bits=host_bits,
+                    input_canonical_row_sha256=hashlib.sha256('\t'.join(row).encode()).hexdigest()))
                 continue
             old = row_variants(row)
             new = [served(name) for name in old]
@@ -521,12 +539,18 @@ def main(argv):
         lst = ShaderList.load(argv[2])
         title, counts_t = lst.resolve(argv[1], 't')
         rest, counts_m = lst.resolve(argv[1], 'm', given=title)   # the runtime reads both: a row goes where it is first
+        source_sha256 = hashlib.sha256(Path(argv[2]).read_bytes()).hexdigest()
         for path, rows, counts in ((argv[4], title, counts_t), (argv[3], rest, counts_m)):
             Path(path).unlink(missing_ok=True)   # often a clone of an older file: written anew, not through the shared blocks
-            Path(path).write_text(EXPORT.format(list_name(argv[2])) + ''.join('\t'.join(row) + '\n' for row in rows))
+            admission = dict(schema='kokiri-pipeline-list-admission-v1', source_sha256=source_sha256,
+                             rejected_host_rows=counts['rejected_host_rows'])
+            Path(path).write_text(EXPORT.format(list_name(argv[2])) + ADMISSION_PREFIX +
+                json.dumps(admission, sort_keys=True, separators=(',', ':')) + '\n' +
+                ''.join('\t'.join(row) + '\n' for row in rows))
             print(f'{path}: {len(rows)} rows; left out {counts["other"]} of other game versions\' shaders and '
                   f'{counts["missing"]} the seed cannot build; {counts["renamed"]} named as the seed serves them, '
-                  f'{counts["merged"]} rows given before')
+                  f'{counts["merged"]} rows given before; '
+                  f'{len(counts["rejected_host_rows"])} unsupported PSO_HOST_BITS rows rejected with provenance')
     elif argv[:1] == ['export'] and len(argv) == 4:
         lst = ShaderList.load(argv[1])
         Path(argv[2]).write_text(lst.export('m', source=list_name(argv[1])))
