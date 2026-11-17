@@ -32,3 +32,9 @@
 
 - 2026-11-15: User rejected the website’s sentimental slogans as corny. Use direct feature names and setup language, with plain sans-serif headings; retain the approved forest identity and interactive HUD.
 - 2026-11-15: The user authorized the reviewed disposable development workbench: typed session lifecycle/travel/input/settings/scenarios and credited headless OoT Editor save transactions. Keep the human observation MCP separate. A copied profile alone does not authorize live mutations: require the dedicated runtime entry, pinned process/build identity, effective application-managed data isolation, an expiring revocable lease and Integration's exclusive permit. Physical input permanently transfers ownership and disarms agent shutdown. The source/CPU tests pass; actual packaged-runtime isolation and live acceptance remain required before host adoption. Preserve MIT editor lineage and all original player data.
+
+- 2026-11-16: Setup follows game files, extracted firmware fonts, then preparation. Use external default storage and keep developer paths under build details. Fast picker checks do not replace builder integrity checks; the source preview still needs Xcode/Python and does not import raw firmware archives.
+
+- 2026-11-16: User approved setup as first-run onboarding without main navigation, with game management in Settings and no permanent Setup tab. Retain missing installation bindings for recovery, persist draft inputs, and commit replacement bindings only after inspection and successful preference persistence.
+
+- 2026-11-16: User chose an untrusted-developer-style app download for the preview. Permit an explicitly unnotarized, ad-hoc-signed manual launcher ZIP with checksums and payload admission; preserve all production Developer ID/notarization/appcast requirements. Game preparation tools remain source-based.
