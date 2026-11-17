@@ -6,11 +6,13 @@ import UniformTypeIdentifiers
 import CryptoKit
 
 enum Destination: String, CaseIterable, Identifiable {
-    case home = "Home", setup = "Setup", performance = "Performance", shaders = "Shader Library", settings = "Settings"
+    case home = "Home", mods = "Mods", saves = "Saves", setup = "Setup", performance = "Performance", shaders = "Shader Library", settings = "Settings"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .home: "leaf"
+        case .mods: "shippingbox"
+        case .saves: "externaldrive"
         case .setup: "shippingbox"
         case .performance: "waveform.path.ecg"
         case .shaders: "square.stack.3d.up"
@@ -41,6 +43,7 @@ enum Destination: String, CaseIterable, Identifiable {
     @Published var hud = HUDPreferences()
     let updates = UpdateService()
     let catalog: CatalogFacade
+    let mods = ModsModel()
 
     private let preferenceFile = KokiriPaths.support.appendingPathComponent("launcher.json")
     private let humanPreview: HumanPreviewBinding?
@@ -58,6 +61,8 @@ enum Destination: String, CaseIterable, Identifiable {
     private var catalogCheckpoint: RuntimeMetadataCheckpoint?
     private var catalogContext: Data?
     private var catalogObservation: AnyCancellable?
+    private var modsObservation: AnyCancellable?
+    private var modsContextGameRunning = false
 
     init() {
         let arguments = ProcessInfo.processInfo.arguments
@@ -79,6 +84,7 @@ enum Destination: String, CaseIterable, Identifiable {
         } else { catalog = CatalogFacade() }
         hud = HUDPreferences.read(from: binding?.settingsURL ?? KokiriPaths.game)
         catalogObservation = catalog.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        modsObservation = mods.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         refreshInstallation()
         if let binding {
             sessionFolder = binding.rootURL
@@ -130,12 +136,19 @@ enum Destination: String, CaseIterable, Identifiable {
         do { try preferences.save(to: preferenceFile) } catch { message = error.localizedDescription }
     }
     func refreshInstallation() {
-        if humanPreviewRequested { refreshShaders(); return }
+        if humanPreviewRequested { refreshShaders(); refreshModsContext(); return }
         if let selected = preferences.installation {
             do { preferences.installation = try GameInstallation.inspect(selected.app) }
             catch { preferences.installation = nil; message = error.localizedDescription }
         }
         refreshShaders()
+        refreshModsContext()
+    }
+    func refreshModsContext() {
+        modsContextGameRunning = anyGameRunning
+        mods.setContext(installation: installation, gameDataFolder: gameDataFolder,
+                        gameRunning: modsContextGameRunning,
+                        launchSupported: !humanPreviewRequested)
     }
     func chooseInstallation() {
         guard !humanPreviewRequested else { message = "This playtest uses the prepared Kokiri game."; return }
@@ -145,6 +158,7 @@ enum Destination: String, CaseIterable, Identifiable {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             preferences.installation = try GameInstallation.inspect(url); savePreferences(); refreshShaders()
+            refreshModsContext()
             message = "Game connected. Kokiri uses its own player profile."
         } catch { message = error.localizedDescription }
     }
@@ -185,14 +199,15 @@ enum Destination: String, CaseIterable, Identifiable {
 
     func play() {
         if let runtime, !runtime.isTerminated { runtime.activate(options: [.activateAllWindows]); return }
-        guard !busy, !building else { return }
+        guard !busy, !building, !mods.busy else { return }
         if reconnectHumanPreview() { runtime?.activate(options: [.activateAllWindows]); return }
         guard !anyGameRunning else { message = "Another game session is running. Finish it before starting Kokiri’s profile."; return }
         if humanPreviewRequested { playHumanPreview(); return }
         guard let selected = installation else { selection = .setup; return }
         busy = true
+        refreshModsContext()
         Task {
-            defer { busy = false }
+            defer { busy = false; refreshModsContext() }
             do {
                 let verified = try GameInstallation.inspect(selected.app)
                 let folder = KokiriPaths.sessions.appendingPathComponent(ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-") + "-" + UUID().uuidString.prefix(8))
@@ -204,11 +219,13 @@ enum Destination: String, CaseIterable, Identifiable {
                     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
                 }
                 let configuration = NSWorkspace.OpenConfiguration()
-                // No graphics, mod, shader, focus or player-input overrides.
+                // Graphics and input remain controlled by the game. The selected
+                // mod profile is copied to a separate immutable session overlay.
                 var environment = ["TOTK_PROFILE_DIR": KokiriPaths.profile.path,
                                    "TOTK_GAME_SLOT_DIR": KokiriPaths.sharedSlot.path,
                                    "TOTK_INPUT_FILE": input.path, "OOT_EDITOR_STATUS": status.path,
                                    "TOTK_CLOUD_SAVE_DIR": "0"]
+                environment.merge(try await mods.prepareLaunch(app: verified.app, gameDataFolder: gameDataFolder, sessionFolder: folder)) { _, new in new }
                 if preferences.observeSessions {
                     environment["DM_NVN_TSV"] = folder.appendingPathComponent("timings.tsv").path
                     environment["DM_NVN_TSV_CALLS"] = "0"
@@ -315,6 +332,7 @@ enum Destination: String, CaseIterable, Identifiable {
     }
 
     private func tick() {
+        if anyGameRunning != modsContextGameRunning { refreshModsContext() }
         guard let runtime else { return }
         if runtime.isTerminated {
             let endedInstallation = activeInstallation

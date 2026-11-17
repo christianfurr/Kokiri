@@ -37,6 +37,8 @@ struct MainView: View {
                 Group {
                     switch model.selection ?? .home {
                     case .home: HomeView()
+                    case .mods: ModsView(model: model.mods).disabled(model.busy || model.building)
+                    case .saves: SavesView(profileFolder: model.profileFolder)
                     case .setup: SetupView()
                     case .performance: PerformanceView()
                     case .shaders: ShaderLibraryView()
@@ -48,7 +50,7 @@ struct MainView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(action: model.play) { Label(model.running ? "Return to Game" : "Play", systemImage: "play.fill") }
-                    .disabled(model.busy || model.building || (model.installation == nil && !model.running))
+                    .disabled(model.busy || model.building || model.mods.busy || (model.installation == nil && !model.running))
             }
         }
         .preferredColorScheme(.light)
@@ -78,7 +80,8 @@ struct HomeView: View {
                             Text("Play continues with the connected profile. Your original saves stay in place.")
                                 .font(.system(size: 12)).foregroundStyle(.secondary)
                             HStack {
-                                Button("Show Saves") { model.reveal(model.profileFolder) }
+                                Button("View Saves") { model.selection = .saves }
+                                Button("Show in Finder") { model.reveal(model.profileFolder) }
                                 if model.canImportProfile { Button("Import Profile…", action: model.importProfile) }
                             }
                         }
@@ -132,7 +135,7 @@ struct HomeView: View {
                 Button(action: { if model.installation == nil { model.selection = .setup } else { model.play() } }) {
                     Label(model.installation == nil ? "Set Up Game" : model.running ? "Return to Game" : "Play Game", systemImage: model.installation == nil ? "arrow.right" : "play.fill")
                         .font(.system(size: 13, weight: .semibold)).padding(.horizontal, 16).padding(.vertical, 9)
-                }.buttonStyle(.borderedProminent).disabled(model.busy || model.building)
+                }.buttonStyle(.borderedProminent).disabled(model.busy || model.building || model.mods.busy)
             }.padding(24).background(.background)
         }.clipShape(RoundedRectangle(cornerRadius: 20))
             .overlay(RoundedRectangle(cornerRadius: 20).stroke(Palette.line, lineWidth: 1))

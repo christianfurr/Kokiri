@@ -6,7 +6,7 @@ Engine dependency licenses remain beside the source. Consult [COPIES.md](engine/
 
 The native Mac product uses [Sparkle 2.10.0](https://github.com/sparkle-project/Sparkle/releases/tag/2.10.0) under MIT. Its preparation script downloads the official artifact, verifies its pinned checksum and copies Sparkle's license into the built app. The repository does not contain that prebuilt framework.
 
-The development save workshop uses pure save-model functions and inventory metadata from [Traiver/OOT-SW2SE](https://github.com/Traiver/OOT-SW2SE), with Christian Furr's macOS adaptations. Its [provenance](tools/kokiri-mcp/save_workshop/PROVENANCE.md) records the imported revision and scope; the adjacent [MIT license](tools/kokiri-mcp/save_workshop/LICENSE) preserves the original notice. Game/save bytes and upstream artwork are not included.
+The development save workshop and native read-only save viewer use save-model layouts and inventory metadata from [Traiver/OOT-SW2SE](https://github.com/Traiver/OOT-SW2SE), with Christian Furr's macOS adaptations. The workshop's [provenance](tools/kokiri-mcp/save_workshop/PROVENANCE.md) records the imported revision and scope; the adjacent [MIT license](tools/kokiri-mcp/save_workshop/LICENSE) and native viewer source preserve the original notice. Game/save bytes and upstream artwork are not included.
 
 The catalog protocol, service and client code use the root MIT license. The reference pipeline dataset preserves the MacNativeGames MIT notice in [services/catalog/seed/LICENSE](services/catalog/seed/LICENSE) and its exact source revision/hash in the seed provenance. No game or shader-source license is granted by this metadata dataset.
 
