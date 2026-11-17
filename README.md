@@ -9,7 +9,7 @@
 
 Kokiri brings the **Nintendo Switch 2 edition of Ocarina of Time** to Apple silicon Macs, with a native launcher, custom in-game settings and a configurable performance HUD. It builds on the credited [MacNativeGames](https://github.com/ly05010419/MacNativeGames) native ARM64 and Metal runtime. You build the game locally from your own files.
 
-**Development preview.** Full v28 preparation remains incomplete, with no accepted playable package from the current full-v28 build. Severe FPS drops, compilation hitches and high memory use remain unresolved. The latest v28 user playtest reported no rendering corruption; broader visual checks remain open. See the dated [project status](STATUS.md) for preparation, catalog and update acceptance.
+**Development preview.** There is no stable release yet. Full v28 preparation completed for the current private playtest: 42,466 compiled Metal libraries and 28,786 pipelines, including 196 mesh pipelines. The user reports smooth gameplay with occasional new pipeline compilation; broader performance, memory and visual acceptance remain open. The [public metadata catalog](https://catalog.christianfurr.dev) now serves 29,796 signed reference recipes.
 
 [Website & HUD preview](https://christianfurr.github.io/Kokiri/) · [Status](STATUS.md) · [Build guide](BUILDING.md) · [Documentation](docs/README.md) · [Report a problem](https://github.com/christianfurr/Kokiri/issues) · [Contribute](CONTRIBUTING.md)
 
@@ -25,7 +25,7 @@ Actual native app window, captured 2026-11-15 with an existing compatible game b
 - **A configurable performance HUD.** Choose four corners, four sizes and three detail modes. Position, size and detail have been checked in gameplay and persist between launches.
 - **Local session statistics.** Inspect physical memory use, sampled area and optional frame timing. Recordings show their date and build, and observed game rates exclude generated frames.
 
-Kokiri also develops an **open shader and pipeline catalog** that compatible projects can integrate. The public protocol endpoint responds; a published dataset and verified native adoption remain pending. The launcher's signed-update plumbing uses Sparkle, alongside a separate runtime-source update path that rebuilds from your own assets. Production feeds, distribution signing and actual game update/relaunch/rollback acceptance remain pending.
+Kokiri also develops an **open shader and pipeline catalog** that compatible projects can integrate. The public service serves 29,796 signed reference recipes, and the native app verifies downloads into its separate metadata cache. Exact runtime warm-up adoption remains a separate acceptance gate. The launcher's signed-update plumbing uses Sparkle, alongside a separate runtime-source update path that rebuilds from your own assets. Production feeds, distribution signing and actual game update/relaunch/rollback acceptance remain pending.
 
 ## Try Kokiri
 
@@ -74,7 +74,15 @@ The private game app is a separate build through `engine/build.py`. It validates
 
 ## Gameplay status and performance
 
-The [project status](STATUS.md) separates completed stages from pending package, gameplay, catalog and update acceptance. Source metadata totals do not count compiled shaders or pipelines.
+| Area | Current status |
+| --- | --- |
+| Native launcher | Compiles; Home and Performance screenshots show the implemented app |
+| Custom menu and HUD | Checked in a copied-profile gameplay session; physical L3 + R3 verification remains open |
+| Whole-game performance | Unverified; severe FPS drops, compilation stalls and memory growth remain open |
+| v28 visual correctness | No corruption reported in the latest user playtest; broader area and visual checks remain open |
+| v28 shader preparation | Complete for the current private build; preparation does not guarantee every gameplay specialization is covered |
+| Public metadata catalog | Live signed reference dataset; native downloads remain separate from game caches |
+| Automatic updates | Plumbing tested; production signing and distribution remain pending |
 
 New results need a matching build, hardware, resolution, tested route and cache state. We report actual game presentation rates separately from frame generation. We do not claim whole-game 60 FPS or a performance advantage over another project.
 

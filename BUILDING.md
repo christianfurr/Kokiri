@@ -1,6 +1,6 @@
 # Build Kokiri
 
-Run the commands below from the repository root. Check [current status](STATUS.md) first: full v28 preparation remains incomplete, and contributors do not yet have an accepted playable package from that build. Build duration, peak memory and whole-game performance remain unverified.
+Run the commands below from the repository root. Check [current status](STATUS.md) first: full v28 preparation is accepted for one private playable package. Your own build still needs its matching preparation receipt; build duration, peak memory and whole-game performance are not guaranteed.
 
 Kokiri has two app bundles:
 

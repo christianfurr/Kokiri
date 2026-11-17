@@ -297,10 +297,13 @@ public actor CatalogClient {
     private func request(path: String, body: Data? = nil, limit: Int) async throws -> Data {
         guard let endpoint else { throw KokiriError.message("The public catalog is not configured in this build.") }
         var request = URLRequest(url: endpoint.appendingPathComponent(path))
+        request.setValue("Kokiri-Catalog/1", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.httpMethod = body == nil ? "GET" : "POST"; request.httpBody = body
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (bytes, response) = try await session.bytes(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == (body == nil ? 200 : 202) else { throw KokiriError.message("Catalog request was not accepted.") }
+        guard let http = response as? HTTPURLResponse else { throw KokiriError.message("The catalog returned an invalid response.") }
+        guard http.statusCode == (body == nil ? 200 : 202) else { throw KokiriError.message("Catalog request was not accepted (HTTP \(http.statusCode)).") }
         if response.expectedContentLength > Int64(limit) { throw KokiriError.message("Catalog response exceeds limits.") }
         var data = Data()
         for try await byte in bytes { if data.count == limit { throw KokiriError.message("Catalog response exceeds limits.") }; data.append(byte) }
@@ -345,10 +348,18 @@ public actor CatalogClient {
     /// Downloads only trusted, exact-context metadata to a separate atomic
     /// artifact. Runtime adoption is explicit; this never replaces a shader cache.
     public func refresh(context data: Data) async throws -> URL {
+        try await download(context: data, referenceOnly: false)
+    }
+    /// Verified reference metadata is kept apart from exact runtime warm-up input.
+    public func refreshReference(context data: Data) async throws -> URL {
+        try await download(context: data, referenceOnly: true)
+    }
+    private func download(context data: Data, referenceOnly: Bool) async throws -> URL {
         try CatalogWire.require(!isRefreshing, "Catalog refresh is already running.")
         isRefreshing = true; defer { isRefreshing = false }
         let expected = try CatalogWire.context(CatalogWire.parse(data, limit: 2048))
-        try CatalogWire.require(CatalogWire.fingerprints.allSatisfy { !(expected[$0] is NSNull) }, "The runtime context is not qualified for shared warm-up.")
+        let qualified = CatalogWire.fingerprints.allSatisfy { !(expected[$0] is NSNull) }
+        try CatalogWire.require(referenceOnly ? !qualified : qualified, "The catalog context does not match this download mode.")
         let cid = CatalogWire.hash(try CatalogWire.canonical(expected))
         let raw = try await request(path: "v1/catalogs/\(cid)/manifest", limit: 262144)
         let signed = try CatalogWire.object(CatalogWire.parse(raw, limit: 262144), ["manifest", "key_id", "signature"])
@@ -358,7 +369,7 @@ public actor CatalogClient {
         try CatalogWire.require(try Curve25519.Signing.PublicKey(rawRepresentation: key).isValidSignature(signature, for: CatalogWire.canonical(m)), "Catalog signature is invalid.")
         let actual = try CatalogWire.context(m["context"])
         try CatalogWire.require(try CatalogWire.canonical(actual) == CatalogWire.canonical(expected), "Catalog context is incompatible.")
-        try CatalogWire.require(m["protocol"] as? String == CatalogWire.version && m["context_id"] as? String == cid && m["compatibility"] as? String == "exact" && m["dataset_license"] as? String == "MIT", "Catalog manifest is incompatible.")
+        try CatalogWire.require(m["protocol"] as? String == CatalogWire.version && m["context_id"] as? String == cid && m["compatibility"] as? String == (referenceOnly ? "reference-only" : "exact") && m["dataset_license"] as? String == "MIT", "Catalog manifest is incompatible.")
         guard let revision = CatalogWire.integer(m["revision"]), revision >= 1,
               let count = CatalogWire.integer(m["record_count"]), (0...100000).contains(count),
               let index = m["packs"] as? [[String: Any]], index.count <= 1024,
@@ -388,16 +399,18 @@ public actor CatalogClient {
         // Reserve one MiB for the new atomic index while the old index exists.
         // Pack files + published indexes + staged bytes remain under64 MiB.
         var cacheBytes = 1024 * 1024
-        let readyFolder = store.appendingPathComponent("runtime-ready", isDirectory: true)
-        if fm.fileExists(atPath: readyFolder.path) {
-            let values = try readyFolder.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
-            try CatalogWire.require(values.isDirectory == true && values.isSymbolicLink != true, "Unexpected catalog index folder.")
-            let files = try fm.contentsOfDirectory(at: readyFolder, includingPropertiesForKeys: [.isSymbolicLinkKey, .isRegularFileKey, .fileSizeKey])
-            try CatalogWire.require(files.count <= 256, "Catalog index history is full.")
-            for file in files {
-                let v = try file.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey, .fileSizeKey])
-                try CatalogWire.require(v.isRegularFile == true && v.isSymbolicLink != true && CatalogWire.matches(file.lastPathComponent, "[a-f0-9]{64}\\.json") && (v.fileSize ?? Int.max) <= 1024 * 1024, "Unexpected catalog index entry.")
-                cacheBytes += v.fileSize ?? 1024 * 1024
+        for name in ["reference", "runtime-ready"] {
+            let readyFolder = store.appendingPathComponent(name, isDirectory: true)
+            if fm.fileExists(atPath: readyFolder.path) {
+                let values = try readyFolder.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+                try CatalogWire.require(values.isDirectory == true && values.isSymbolicLink != true, "Unexpected catalog index folder.")
+                let files = try fm.contentsOfDirectory(at: readyFolder, includingPropertiesForKeys: [.isSymbolicLinkKey, .isRegularFileKey, .fileSizeKey])
+                try CatalogWire.require(files.count <= 256, "Catalog index history is full.")
+                for file in files {
+                    let v = try file.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey, .fileSizeKey])
+                    try CatalogWire.require(v.isRegularFile == true && v.isSymbolicLink != true && CatalogWire.matches(file.lastPathComponent, "[a-f0-9]{64}\\.json") && (v.fileSize ?? Int.max) <= 1024 * 1024, "Unexpected catalog index entry.")
+                    cacheBytes += v.fileSize ?? 1024 * 1024
+                }
             }
         }
         try CatalogWire.require(cacheBytes <= 64 * 1024 * 1024, "Catalog index cache is full.")
@@ -463,7 +476,7 @@ public actor CatalogClient {
         try CatalogWire.require(recordsTotal == count, "Catalog total count mismatch.")
         let artifact = try CatalogWire.canonical(["protocol": CatalogWire.version, "context_id": cid, "signed_manifest": signed, "pack_files": packReferences])
         try CatalogWire.require(artifact.count <= 1024 * 1024, "Catalog index exceeds application limits.")
-        let folder = store.appendingPathComponent("runtime-ready", isDirectory: true)
+        let folder = store.appendingPathComponent(referenceOnly ? "reference" : "runtime-ready", isDirectory: true)
         if FileManager.default.fileExists(atPath: folder.path) {
             let values = try folder.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
             try CatalogWire.require(values.isSymbolicLink != true && values.isDirectory == true, "Catalog artifact folder is not a private directory.")

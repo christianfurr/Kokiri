@@ -14,12 +14,12 @@ Independent Mac project. [STATUS.md](../STATUS.md) is the dated public acceptanc
 - `LICENSE`: MIT terms preserving upstream copyright.
 - `engine/`: pinned public native runtime, reviewed ownership/mesh/NS2 transfer fixes, standalone build entry. External source-built shader tools use serviced NativeAOT 10.0.14; copied-profile gameplay verification is in progress.
 - `engine/docs/kokiri-startup.md`: original logo startup presentation, real phase/readiness rules and offscreen native view validation.
-- `macos/`: SwiftUI product UI, local profile import/launch, measured session reader and Sparkle updater. `macos/README.md` documents capabilities and configuration. Real, dated Home/Performance captures and provenance are in `assets/readme/`.
+- `macos/`: SwiftUI Home, profile-aware Play/Settings, receipt-bound preparation counts, public Shader Library and measured session reader with Sparkle updater. `macos/README.md` documents capabilities and configuration. Real, dated Home/Performance captures and provenance are in `assets/readme/`.
 - `services/catalog/`: open exact-context metadata protocol, Worker/D1 service, quarantine/signing, queue SDK and local tests.
 - `assets/brand/`: original Kokiri logo and generation provenance.
 - `website/`: buildless GitHub Pages site with an interactive, sample-data HUD preview; asset provenance and local preview instructions live alongside it. `.github/workflows/pages.yml` publishes only this folder.
 - `release/`: signed shell archive/appcast/delta preparation and a separate signed runtime-source updater. Local fixture/diagnostic tests do not establish actual game update/relaunch/rollback or production delivery; each route documents its remaining gates.
-- `docs/README.md`: navigation for build, adapter, privacy, performance and release documentation. The catalog protocol endpoint responds; a published dataset, exact runtime compatibility and native warm-plan adoption remain acceptance work.
+- `docs/README.md`: navigation for build, adapter, privacy, performance and release documentation. Public signed reference delivery is verified; exact runtime compatibility and native warm-plan gameplay adoption remain acceptance work.
 - `scripts/check_publication.py` and `tests/test_publication.py`: prospective/staged source boundary and exact reviewed image/metadata pins. Source-only publication excludes generated game payloads and private player data.
 
 The independent public repository is https://github.com/christianfurr/Kokiri. Game-derived code, shader binaries and user data belong outside this source repository. Integration owns accepted source integration, installation/releases and exclusive gameplay/GPU scheduling. Use separate worktrees and owned output paths; preserve shared uncommitted MCP and website work.

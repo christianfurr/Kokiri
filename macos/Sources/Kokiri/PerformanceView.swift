@@ -11,12 +11,12 @@ struct PerformanceView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 HStack(alignment: .top) {
-                    PageHeading(eyebrow: "The session notebook", title: "Performance, in view", detail: "Real observations from your game. Generated frames are excluded from the game frame rate.")
+                    PageHeading(eyebrow: "Your session", title: "Performance", detail: "Real observations from your game. Generated frames are excluded from the game frame rate.")
                     Button("Open Recording…", action: model.chooseRecording).disabled(model.running || model.busy)
                 }
                 sourceBanner
                 HStack(spacing: 14) {
-                    MetricCard(label: "Observed game rate", value: number(model.snapshot.observedFPS), unit: "FPS", detail: "Last available 30 seconds · not certified")
+                    MetricCard(label: "Observed game rate", value: number(model.snapshot.observedFPS), unit: "FPS", detail: model.running ? "Recent game presentations" : "Last session’s presentations")
                     MetricCard(label: "Latest frame interval", value: number(model.snapshot.metrics["@frame_ms"]), unit: "ms", detail: "Game frame timing sample")
                     MetricCard(label: "Physical footprint", value: number(model.snapshot.footprint.map { Double($0) / 1_073_741_824 }, decimals: 2), unit: "GiB", detail: "Process physical footprint · not VRAM")
                 }
@@ -49,7 +49,7 @@ struct PerformanceView: View {
                                 Text(position.map { String(format: "%.2f", $0) }.joined(separator: "   "))
                                     .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
                             }
-                            Text("A sampled player position does not prove the game is unpaused or ready for input.").font(.system(size: 10)).foregroundStyle(.secondary)
+                            Text("Location is sampled while the game responds.").font(.system(size: 10)).foregroundStyle(.secondary)
                         }
                     }
                     Surface {
@@ -57,7 +57,7 @@ struct PerformanceView: View {
                             Eyebrow(text: "GPU timing")
                             DetailRow(title: "First-to-last span", value: number(model.snapshot.gpuSpan) + " ms")
                             DetailRow(title: "Command-buffer sum", value: number(model.snapshot.metrics["@gpu_ms"]) + " ms")
-                            Text("These intervals can include waits or overlap. They are not isolated shader execution costs.").font(.system(size: 10)).foregroundStyle(.secondary)
+                            Text("GPU intervals can include waits and overlapping work.").font(.system(size: 10)).foregroundStyle(.secondary)
                         }
                     }
                 }

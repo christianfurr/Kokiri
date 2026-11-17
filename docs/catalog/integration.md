@@ -63,17 +63,23 @@ requeuing accepted IDs. The app must snapshot/verify the prelaunch file prefix
 and bundled context before attributing appended rows to a session. Importing a
 whole legacy profile must not relabel old v23 recipes as new v28 output.
 
-Current boundary: service/reference/native clients are locally implemented.
-The public protocol endpoint responds, but a published dataset and verified
-native adoption remain pending. Production key/hosting verification does not
-establish exact runtime target/options compatibility or warm-up benefit. See
-[current project status](../../STATUS.md); no measured performance gain is claimed.
+The public service at https://catalog.christianfurr.dev serves a signed v28
+reference dataset: 29,796 records in 233 packs, published on 2026-11-16.
+Anonymous HTTPS manifest and pack downloads were verified with the pinned key
+`kokiri-catalog-2026-11-15-a`. Its raw Ed25519 public key is
+`ktuxMahqMQ1aQGZNmczKYmPxp3VXUpjGcdxwKW36uDA=`. Use a descriptive client
+User-Agent; administrative publication and contribution ingestion stay closed.
+
+The prepared-game app downloads these into its separate `reference/` namespace.
+Compiler identity is known; target and effective-option fingerprints remain
+unqualified in this reference dataset. It cannot become an exact runtime warm
+list. Verified runtime adoption and a measured performance benefit remain
+separate acceptance gates. No compiled shader binaries are hosted.
 
 ## Kokiri native handoff
 
 The native C/R handoff, execution identity producer and renderer admission hook
 are described in [runtime-handoff.md](runtime-handoff.md). They are CPU tested;
-actual gameplay adoption remains unverified. Public protocol availability does
-not establish compatible catalog delivery. Mesh pipelines
+actual gameplay adoption remains unverified. Public reference hosting is live. Mesh pipelines
 and precompiled-library compiler provenance are not supported by that first
 adapter, so it does not claim to resolve the measured cold mesh hitches.
