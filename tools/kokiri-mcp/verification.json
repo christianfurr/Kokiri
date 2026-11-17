@@ -1,12 +1,12 @@
 {
-  "verified_at_utc": "2026-11-15T19:35:11.441635+00:00",
+  "verified_at_utc": "2026-11-17T05:32:08.606206+00:00",
   "sdk": {
     "distribution": "mcp",
     "version": "2.3.0",
     "dependencies": "uv.lock"
   },
   "test_command": "uv run --locked python -m unittest discover -s tests -v",
-  "tests_passed": 59,
+  "tests_passed": 84,
   "protocols_tested": [
     "2026-07-28",
     "2025-11-25"
@@ -21,7 +21,7 @@
     "development tool discovery and closed copied-profile lifecycle",
     "development save snapshot, semantic plan, atomic apply, idempotent retry and restore; source fixture unchanged"
   ],
-  "native_verification": "libproc self-sample matched C macOS SDK layout for process-start abstime and physical footprint",
+  "native_verification": "Independent C SDK probe matched process-start, physical footprint and exact executable path, including uv-managed CPython",
   "mutation_tools_exposed": [],
   "live_acceptance": {
     "status": "pending",
@@ -32,20 +32,20 @@
   },
   "source_sha256": {
     "server.py": "0a41545feacc70f15fb36e3122b6ae0699fd82b9508e0100672bd4a9fc0ddf6e",
-    "kokiri.py": "97ecb183bd047b6da9efeec522298063fe55a5ce16c103a87a7fbe396ae648c1",
+    "kokiri.py": "2578cbaf310789e4bdfbddfb08ecd541f3d053c0a50ae9bbba25d4d268674a0c",
     "uv.lock": "191ed03c8fb7e5479625861623369896ad1daa456d31e66a77e9a989b50f3e66",
-    "development_server.py": "cb6c33bd45d6eef15d822ca46368a83e1defe36367f98aa589b93d246be39782",
+    "development_server.py": "b859e4441c1431b5fc4b0ea5147533a759d7b0f8a5389ed32d6af4dcb55e25fe",
     "pyproject.toml": "e048854acf259cdd7420bed72cd7a00a8334bc7974fa1f0593c929aca199e03e",
-    "development.py": "85399408e8b843ad154159289b11d914fd02c76a4e1c8a13f5f3beb2cfba2439",
+    "development.py": "e9ccca29c22516354574914b1336ed0a92daca9f8d733a3f9b5991fe5b8fe6f0",
     "plugin.json": "2f029b4176a16d6d1780a32463c7260794174e319e0223a7abea09e6c70db7db",
     "commands.py": "ad3a9b087c170584888ae6c5d674ddae72418360c51990ebffc90867f029899f",
-    "development_admin.py": "14cdf52ff63c69b4a4411809ef283279fb917336495999e4a771df4352686439",
+    "development_admin.py": "6f8f64929f1a093249b6c1886dd3791a3dbd30827fbedcddf3d7a526e1639a60",
     "mcp.json": "f6211a8ce3faff8baa25f36668272b544166a3de283943a1dbe1397cb24e063b",
     "tests/test_save_workshop.py": "6545ab813b20e301cf174b1c9653f86938b6a230bbcb55c5539f7cff0f1a167b",
     "tests/test_development_stdio.py": "51c8a257774f312918c06b9cf6ba7513067b0fc553f68000e4ce0b24617e8943",
-    "tests/test_development.py": "002916fbbddb30603aa1fef4f2bc90e6e881670d3fa82b4b9dd2cc328585aad5",
+    "tests/test_development.py": "d9401306ab956529833a1aa86ba51727b9e8ef634ff412f2241c797e4a763d1c",
     "tests/test_stdio.py": "95b0327b66cbcbecbdbef6f291c2095501687b591c7abc35835442c1248b6c47",
-    "tests/test_boundaries.py": "25f74ffa07857d279c460a0684d256c3af72a60ac0d87c888020781d08e2ac59",
+    "tests/test_boundaries.py": "99fa328906d76f220bd476340a2c46f1e0808b730876e632bc5665d07d6e573a",
     "save_workshop/workshop.py": "b65fa5aa4bdb6e97e8c4d31db3346fbb578888196be99fdf8477cf8d322b9539",
     "save_workshop/__init__.py": "d73d183f2c48bb0de037d40027fbca467402c58ef6690f7c397729b346687a42",
     "save_workshop/domain.cjs": "4c65eb9509c241c419e0e87de9ef28479571c93f54dcc01d87edf56a221f872e",
@@ -71,15 +71,10 @@
     "Human observation server and host registration remain separate from the unregistered development server.",
     "Creation-only cold cache label is invalidated on launch; preserved cache warmth is unverified.",
     "No real player profile, game assets, compiled shader caches or logs were edited or included in this package.",
-    "19 native CPU tests and syntax checks do not certify full runtime linking, GPU behavior, visual acceptance or physical-controller behavior."
+    "19 native CPU tests and syntax checks do not certify full runtime linking, GPU behavior, visual acceptance or physical-controller behavior.",
+    "Preview verification includes protected development-root defaults; live game/control acceptance remains separate."
   ],
-  "test_elapsed_seconds": 4.831,
-  "test_groups": {
-    "default_observation": 28,
-    "development_unit": 18,
-    "development_sdk_stdio": 2,
-    "transactional_save": 11
-  },
+  "test_elapsed_seconds": 4.586,
   "native_cpu_verification": {
     "tests_passed": 19,
     "launcher": 6,
