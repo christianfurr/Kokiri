@@ -42,3 +42,6 @@
 - 2026-11-16: User approved setup as first-run onboarding without main navigation, with game management in Settings and no permanent Setup tab. Retain missing installation bindings for recovery, persist draft inputs, and commit replacement bindings only after inspection and successful preference persistence.
 
 - 2026-11-16: User chose an untrusted-developer-style app download for the preview. Permit an explicitly unnotarized, ad-hoc-signed manual launcher ZIP with checksums and payload admission; preserve all production Developer ID/notarization/appcast requirements. Game preparation tools remain source-based.
+
+- 2026-11-17: User prefers ready-made shader/pipeline downloads and accepts local compilation to simplify Play. While homeserver is off, build verified offline cache recovery, a signed-recipe merge for local preparation and guarded operator contribution publication. Keep current metadata-only trust and runtime compatibility checks; binary delivery and public-ingress activation require separate acceptance.
+- 2026-11-17: User requested protection from malicious contributions and DDoS. Keep strict metadata-only uploads quarantined, verify signatures/hashes before use, reject unrecognized raw paths before buffering, and retain origin resource limits. Live edge/Access verification remains required; do not claim DDoS immunity.

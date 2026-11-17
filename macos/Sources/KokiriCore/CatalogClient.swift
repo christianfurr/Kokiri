@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import CryptoKit
 import CoreFoundation
 
@@ -142,6 +143,79 @@ enum CatalogWire {
         try require(Set(validated.compactMap { $0["id"] as? String }).count == validated.count, "Duplicate catalog record.")
         try require(try canonical(e).count <= 65536, "Catalog batch exceeds limits.")
         return e
+    }
+}
+
+enum CatalogLocalFile {
+    static func isTrue(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) == CFBooleanGetTypeID() && number.boolValue
+    }
+    static func realPath(_ url: URL) throws -> String {
+        guard let bytes = Darwin.realpath(url.path, nil) else { throw KokiriError.message("Catalog local directory is unavailable.") }
+        defer { free(bytes) }
+        return String(cString: bytes)
+    }
+    private static func open(_ url: URL, limit: Int) throws -> (Int32, stat) {
+        let path = url.path
+        let parts = path.split(separator: "/").map(String.init)
+        try CatalogWire.require(path.hasPrefix("/") && path.utf8.count <= 4096 && !parts.isEmpty && parts.allSatisfy { $0 != "." && $0 != ".." }, "Invalid catalog local path.")
+        var parent = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard parent >= 0 else { throw KokiriError.message("Catalog directory is unavailable.") }
+        for part in parts.dropLast() {
+            let next = openat(parent, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            Darwin.close(parent); parent = next
+            guard parent >= 0 else { throw KokiriError.message("Catalog directory is unavailable or contains a symbolic link.") }
+        }
+        let fd = openat(parent, parts.last!, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        Darwin.close(parent)
+        guard fd >= 0 else { throw KokiriError.message("Catalog local input is unavailable.") }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size >= 0, info.st_size <= limit else {
+            Darwin.close(fd); throw KokiriError.message("Catalog local input exceeds limits or is not a regular file.")
+        }
+        return (fd, info)
+    }
+    private static func unchanged(_ fd: Int32, _ before: stat, _ count: Int) throws {
+        var after = stat()
+        try CatalogWire.require(fstat(fd, &after) == 0 && count == before.st_size && before.st_ino == after.st_ino && before.st_size == after.st_size && before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec && before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec, "Catalog local input changed while reading.")
+    }
+    static func read(_ url: URL, limit: Int) throws -> Data {
+        var bytesRead = 0
+        return try read(url, limit: limit, bytesRead: &bytesRead)
+    }
+    static func read(_ url: URL, limit: Int, bytesRead: inout Int) throws -> Data {
+        let (fd, before) = try open(url, limit: limit)
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true); defer { try? handle.close() }
+        var data = Data()
+        while data.count < before.st_size {
+            let part = try handle.read(upToCount: min(65536, Int(before.st_size) - data.count)) ?? Data()
+            if part.isEmpty { break }
+            data.append(part)
+            bytesRead += part.count
+            try CatalogWire.require(data.count <= limit, "Catalog local input grew beyond its bound.")
+        }
+        try unchanged(fd, before, data.count)
+        return data
+    }
+    static func hash(_ url: URL, limit: Int) throws -> (hash: String, bytes: Int) {
+        var bytesRead = 0
+        return try hash(url, limit: limit, bytesRead: &bytesRead)
+    }
+    static func hash(_ url: URL, limit: Int, bytesRead: inout Int) throws -> (hash: String, bytes: Int) {
+        let (fd, before) = try open(url, limit: limit)
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true); defer { try? handle.close() }
+        var digest = SHA256(), count = 0
+        while count < before.st_size {
+            let part = try handle.read(upToCount: min(65536, Int(before.st_size) - count)) ?? Data()
+            if part.isEmpty { break }
+            count += part.count
+            bytesRead += part.count
+            try CatalogWire.require(count <= limit, "Catalog local input grew beyond its bound.")
+            digest.update(data: part)
+        }
+        try unchanged(fd, before, count)
+        return (digest.finalize().map { String(format: "%02x", $0) }.joined(), count)
     }
 }
 
@@ -354,15 +428,8 @@ public actor CatalogClient {
     public func refreshReference(context data: Data) async throws -> URL {
         try await download(context: data, referenceOnly: true)
     }
-    private func download(context data: Data, referenceOnly: Bool) async throws -> URL {
-        try CatalogWire.require(!isRefreshing, "Catalog refresh is already running.")
-        isRefreshing = true; defer { isRefreshing = false }
-        let expected = try CatalogWire.context(CatalogWire.parse(data, limit: 2048))
-        let qualified = CatalogWire.fingerprints.allSatisfy { !(expected[$0] is NSNull) }
-        try CatalogWire.require(referenceOnly ? !qualified : qualified, "The catalog context does not match this download mode.")
-        let cid = CatalogWire.hash(try CatalogWire.canonical(expected))
-        let raw = try await request(path: "v1/catalogs/\(cid)/manifest", limit: 262144)
-        let signed = try CatalogWire.object(CatalogWire.parse(raw, limit: 262144), ["manifest", "key_id", "signature"])
+    private func verifyManifest(_ signed: [String: Any], expected: [String: Any], cid: String,
+                                referenceOnly: Bool) throws -> (revision: Int, count: Int, packs: [[String: Any]]) {
         guard let keyID = signed["key_id"] as? String, let key = trustedKeys[keyID],
               let signatureText = signed["signature"] as? String, let signature = Data(base64Encoded: signatureText), signature.count == 64 else { throw KokiriError.message("Catalog signing key is not trusted.") }
         let m = try CatalogWire.object(signed["manifest"], ["protocol", "context", "context_id", "compatibility", "dataset_license", "attribution", "revision", "packs", "record_count"])
@@ -380,6 +447,79 @@ public actor CatalogClient {
         }
         try CatalogWire.require(revision >= (state.revisions[cid] ?? 0), "Catalog revision went backwards.")
         try CatalogWire.require(state.revisions[cid] != nil || state.revisions.count < 256, "Catalog context history is full.")
+        return (revision, count, index)
+    }
+    private func verifyPack(_ data: Data, hash: String, bytes: Int, count: Int, contextID: String,
+                            recordIDs: inout Set<String>) throws {
+        try CatalogWire.require(data.count == bytes && CatalogWire.hash(data) == hash, "Catalog pack integrity check failed.")
+        try autoreleasepool {
+            let pack = try CatalogWire.object(CatalogWire.parse(data, limit: bytes), ["protocol", "context_id", "records"])
+            guard pack["protocol"] as? String == CatalogWire.version, pack["context_id"] as? String == contextID,
+                  let records = pack["records"] as? [Any], records.count == count else {
+                throw KokiriError.message("Catalog pack context/count mismatch.")
+            }
+            for record in records {
+                let validated = try CatalogWire.record(record)
+                try CatalogWire.require(recordIDs.insert(validated["id"] as! String).inserted, "Duplicate catalog record across packs.")
+            }
+        }
+    }
+    /// Restores only previously accepted, fully verified metadata. No requests,
+    /// queue writes or runtime-cache changes occur during offline recovery.
+    public func cachedIndex(context data: Data, referenceOnly: Bool = false) throws -> URL? {
+        let expected = try CatalogWire.context(CatalogWire.parse(data, limit: 2048))
+        let qualified = CatalogWire.fingerprints.allSatisfy { !(expected[$0] is NSNull) }
+        try CatalogWire.require(referenceOnly ? !qualified : qualified, "The catalog context does not match this download mode.")
+        let cid = CatalogWire.hash(try CatalogWire.canonical(expected))
+        guard FileManager.default.fileExists(atPath: store.path) else { return nil }
+        let values = try store.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+        try CatalogWire.require(values.isSymbolicLink != true && values.isDirectory == true, "Catalog store is not a private directory.")
+        // Resolve the established store root once (including macOS /var aliases).
+        // Inputs below it still reject symlinks in each path component.
+        let root = URL(fileURLWithPath: try CatalogLocalFile.realPath(store))
+        let file = root.appendingPathComponent(referenceOnly ? "reference" : "runtime-ready").appendingPathComponent(cid + ".json")
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+        let artifact = try CatalogWire.object(CatalogWire.parse(CatalogLocalFile.read(file, limit: 1024 * 1024), limit: 1024 * 1024),
+                                             ["protocol", "context_id", "signed_manifest", "pack_files"])
+        try CatalogWire.require(artifact["protocol"] as? String == CatalogWire.version && artifact["context_id"] as? String == cid,
+                                "Cached catalog identity mismatch.")
+        guard let acceptedRevision = state.revisions[cid] else { throw KokiriError.message("Cached catalog has no accepted revision.") }
+        let signed = try CatalogWire.object(artifact["signed_manifest"], ["manifest", "key_id", "signature"])
+        let manifest = try verifyManifest(signed, expected: expected, cid: cid, referenceOnly: referenceOnly)
+        try CatalogWire.require(manifest.revision == acceptedRevision, "Cached catalog does not match its accepted revision.")
+        guard let references = artifact["pack_files"] as? [[String: Any]], references.count == manifest.packs.count else {
+            throw KokiriError.message("Cached catalog pack references changed.")
+        }
+        var hashes = Set<String>(), recordIDs = Set<String>(), totalBytes = 0, totalRecords = 0
+        for (part, reference) in zip(manifest.packs, references) {
+            _ = try CatalogWire.object(part, ["sha256", "bytes", "record_count"])
+            _ = try CatalogWire.object(reference, ["sha256", "bytes", "record_count", "relative_path"])
+            guard let hash = part["sha256"] as? String, CatalogWire.matches(hash, "[a-f0-9]{64}"), hashes.insert(hash).inserted,
+                  let bytes = CatalogWire.integer(part["bytes"]), (1...262144).contains(bytes),
+                  let count = CatalogWire.integer(part["record_count"]), (1...128).contains(count),
+                  reference["sha256"] as? String == hash, CatalogWire.integer(reference["bytes"]) == bytes,
+                  CatalogWire.integer(reference["record_count"]) == count, reference["relative_path"] as? String == "../packs/" + hash + ".json" else {
+                throw KokiriError.message("Cached catalog pack reference mismatch.")
+            }
+            totalBytes += bytes; totalRecords += count
+            try CatalogWire.require(totalBytes <= 64 * 1024 * 1024 && totalRecords <= 100000, "Cached catalog exceeds limits.")
+            let body = try CatalogLocalFile.read(root.appendingPathComponent("packs").appendingPathComponent(hash + ".json"), limit: bytes)
+            try verifyPack(body, hash: hash, bytes: bytes, count: count, contextID: cid, recordIDs: &recordIDs)
+        }
+        try CatalogWire.require(totalRecords == manifest.count, "Cached catalog total count mismatch.")
+        return file
+    }
+    private func download(context data: Data, referenceOnly: Bool) async throws -> URL {
+        try CatalogWire.require(!isRefreshing, "Catalog refresh is already running.")
+        isRefreshing = true; defer { isRefreshing = false }
+        let expected = try CatalogWire.context(CatalogWire.parse(data, limit: 2048))
+        let qualified = CatalogWire.fingerprints.allSatisfy { !(expected[$0] is NSNull) }
+        try CatalogWire.require(referenceOnly ? !qualified : qualified, "The catalog context does not match this download mode.")
+        let cid = CatalogWire.hash(try CatalogWire.canonical(expected))
+        let raw = try await request(path: "v1/catalogs/\(cid)/manifest", limit: 262144)
+        let signed = try CatalogWire.object(CatalogWire.parse(raw, limit: 262144), ["manifest", "key_id", "signature"])
+        let manifest = try verifyManifest(signed, expected: expected, cid: cid, referenceOnly: referenceOnly)
+        let revision = manifest.revision, count = manifest.count, index = manifest.packs
         let fm = FileManager.default
         try fm.createDirectory(at: store, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // Single directory-owner contract: recover only our UUID-named partial
@@ -454,18 +594,7 @@ public actor CatalogClient {
                 try CatalogWire.require(cacheBytes <= 64 * 1024 * 1024, "Catalog pack cache is full.")
                 data = try await request(path: "v1/packs/\(hash)", limit: size)
             }
-            try CatalogWire.require(data.count == size && CatalogWire.hash(data) == hash, "Catalog pack integrity check failed.")
-            // Bound Foundation's temporary object lifetimes to one pack. Only
-            // fixed-size record IDs and small index entries survive this pool.
-            try autoreleasepool {
-                let pack = try CatalogWire.object(CatalogWire.parse(data, limit: size), ["protocol", "context_id", "records"])
-                guard pack["protocol"] as? String == CatalogWire.version, pack["context_id"] as? String == cid,
-                      let records = pack["records"] as? [Any], records.count == n else { throw KokiriError.message("Catalog pack context/count mismatch.") }
-                for r in records {
-                    let validated = try CatalogWire.record(r)
-                    try CatalogWire.require(recordIDs.insert(validated["id"] as! String).inserted, "Duplicate catalog record across packs.")
-                }
-            }
+            try verifyPack(data, hash: hash, bytes: size, count: n, contextID: cid, recordIDs: &recordIDs)
             if !exists {
                 let temporary = staging.appendingPathComponent(hash + ".json")
                 try data.write(to: temporary, options: .withoutOverwriting)

@@ -1,6 +1,6 @@
 ---
-verified_at_sha: e7be679bf065190a246a72b9820790db5b5de3a1
-verified_at: 2026-11-16
+verified_at_sha: ce77330
+verified_at: 2026-11-17
 ---
 # Kokiri
 
@@ -17,11 +17,13 @@ Independent Mac project. [STATUS.md](../STATUS.md) is the dated public acceptanc
 - `engine/docs/kokiri-startup.md`: original logo startup presentation, real phase/readiness rules and offscreen native view validation.
 - `.cairn/features/2026-11-16-guided-setup/FLOW.md` and `REVIEW.md`: first-run setup, Settings game management, persisted drafts and unavailable-game recovery; native checks and remaining clean-Mac import boundary.
 - `macos/`: SwiftUI Home, Mods loadouts, read-only Saves, profile-aware Play/Settings, preparation counts, public Shader Library and measured session reader with Sparkle updater. `macos/README.md` documents capabilities and configuration. Dated Home/Performance captures and provenance are in `assets/readme/`.
-- `services/catalog/`: open exact-context metadata protocol, Worker/D1 service, quarantine/signing, queue SDK and local tests.
+- `services/catalog/`: exact-context metadata protocol, Worker/D1 and selfhost service, bounded quarantine, offline snapshot review and guarded signed revision publication. `docs/catalog/contributions.md` gives operator commands; public ingress remains disabled until live acceptance.
 - `assets/brand/`: original Kokiri logo and generation provenance.
 - `website/`: buildless GitHub Pages site with an interactive, sample-data HUD preview; asset provenance and local preview instructions live alongside it. `.github/workflows/pages.yml` publishes only this folder.
 - `release/`: signed shell archive/appcast/delta preparation and a separate signed runtime-source updater. Local fixture/diagnostic tests do not establish actual game update/relaunch/rollback or production delivery; each route documents its remaining gates.
-- `docs/README.md`: navigation for build, adapter, privacy, performance and release documentation. Public signed reference delivery is verified; exact runtime compatibility and native warm-plan gameplay adoption remain acceptance work.
+- `docs/README.md`: build and release navigation. `docs/catalog/local-preparation.md` covers offline signed recipe export into existing local `--shader-list` preparation. Native downloads recover verified cache indexes during outages; exact runtime compatibility and gameplay adoption remain separate gates.
 - `scripts/check_publication.py` and `tests/test_publication.py`: prospective/staged source boundary and exact reviewed image/metadata pins. Source-only publication excludes generated game payloads and private player data.
 
 The independent public repository is https://github.com/christianfurr/Kokiri. Game-derived code, shader binaries and user data belong outside this source repository. Integration owns accepted source integration, installation/releases and exclusive gameplay/GPU scheduling. Use separate worktrees and owned output paths; preserve shared uncommitted MCP and website work.
+
+Catalog offline work: `.cairn/features/2026-11-17-catalog-play-ready/` records scope, verification and the unavailable-host gates.
