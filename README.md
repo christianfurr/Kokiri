@@ -11,7 +11,7 @@ Kokiri brings the **Nintendo Switch 2 edition of Ocarina of Time** to Apple sili
 
 **Development preview.** There is no stable release yet. Full v28 preparation completed for the current private playtest: 42,466 compiled Metal libraries and 28,786 pipelines, including 196 mesh pipelines. The user reports smooth gameplay with occasional new pipeline compilation; broader performance, memory and visual acceptance remain open. The [public metadata catalog](https://catalog.christianfurr.dev) now serves 29,796 signed reference recipes.
 
-[Website & HUD preview](https://christianfurr.github.io/Kokiri/) · [Status](STATUS.md) · [Build guide](BUILDING.md) · [Documentation](docs/README.md) · [Report a problem](https://github.com/christianfurr/Kokiri/issues) · [Contribute](CONTRIBUTING.md)
+[Website & HUD preview](https://christianfurr.github.io/Kokiri/) · [Status](STATUS.md) · [Install guide](#install-guide) · [Build guide](BUILDING.md) · [Documentation](docs/README.md) · [Report a problem](https://github.com/christianfurr/Kokiri/issues) · [Contribute](CONTRIBUTING.md)
 
 ![Kokiri native Home window](assets/readme/kokiri-home.png)
 
@@ -27,9 +27,11 @@ Actual native app window, captured 2026-11-15 with an existing compatible game b
 
 Kokiri also develops an **open shader and pipeline catalog** that compatible projects can integrate. The public service serves 29,796 signed reference recipes, and the native app verifies downloads into its separate metadata cache. Exact runtime warm-up adoption remains a separate acceptance gate. The launcher's signed-update plumbing uses Sparkle, alongside a separate runtime-source update path that rebuilds from your own assets. Production feeds, distribution signing and actual game update/relaunch/rollback acceptance remain pending.
 
-## Try Kokiri
+<a id="try-kokiri"></a>
 
-Source builds are for contributors while full-v28 preparation and package acceptance continue. Start with the requirements below and the [build guide](BUILDING.md). If you already have a compatible game app, the native launcher can connect to it; Kokiri-specific controls require a runtime that supports them.
+## Install guide
+
+Kokiri currently requires a source build. There is no stable signed/notarized installer. The launcher and your private game app are separate builds; if you already have a compatible native game app, skip step 3.
 
 | Requirement | Current support |
 | --- | --- |
@@ -41,6 +43,52 @@ Source builds are for contributors while full-v28 preparation and package accept
 | Distribution | Source preview; no stable, notarized download yet |
 
 **This build does not accept an N64 or Nintendo 3DS ROM.** Game files, firmware fonts and generated game apps are not distributed in this repository.
+
+### 1. Get the source
+
+Install full Xcode with its Metal toolchain and Python 3.14 or later, then clone the repository in Terminal:
+
+```sh
+git clone https://github.com/christianfurr/Kokiri.git
+cd Kokiri
+```
+
+The first build needs internet access to fetch pinned public dependencies. For a fresh game import, the external work location needs at least **40 GiB free** to pass the initial check; full preparation may need more. See [supported dump layouts and font requirements](BUILDING.md#requirements) before building.
+
+### 2. Build and open the launcher
+
+Run from the repository root:
+
+```sh
+bash macos/test.sh
+bash macos/build.sh
+open macos/build/Kokiri.app
+```
+
+The launcher is built at `macos/build/Kokiri.app` and locally signed ad hoc. Keep this checkout if you plan to rebuild it. Quit the launcher before replacing its bundle with a later build.
+
+### 3. Build your private game app
+
+Replace the example paths below with absolute paths to your own files and fresh work/output locations **outside the repository**. Quit gameplay first and run only one heavy build at a time.
+
+```sh
+OOT_SHADERS=full OOT_SHADER_SUBSET=all OOT_BUNDLE_SHADERS=1 \
+python3.14 -I engine/build.py "/absolute/path/to/owned-dump" \
+  --shared-fonts "/absolute/path/to/owned-shared-fonts" \
+  --work "/absolute/path/outside-checkout/Kokiri-work" \
+  --out "/absolute/path/outside-checkout/Kokiri Game.app" \
+  --jobs 2
+```
+
+These settings request full shader preparation. Wait for successful completion before connecting the game; building the launcher alone does not prepare it. Keep the work directory for compatible reuse. If the build fails, review its error and work-folder logs before retrying the same paths. The [complete build guide](BUILDING.md) covers input validation, preparation receipts and troubleshooting.
+
+### 4. Connect and play
+
+1. In Kokiri, choose **Set Up Game**, then **Connect App…** and select your built `Kokiri Game.app` or a compatible native MacNativeGames app.
+2. To continue an existing save, close the game and use **Import Profile…** to select the complete profile folder. Kokiri copies it and refuses to replace an existing Kokiri profile; your original stays in place.
+3. Choose **Play Game** from Home. On matching Kokiri runtimes, **key 1** opens the in-game settings and HUD controls. The **L3 + R3** controller shortcut still needs physical-controller verification.
+
+Kokiri-specific features depend on the connected runtime. The public Shader Library provides signed reference metadata, not game files or compiled shader packs. See [current status](STATUS.md) for gameplay and update limitations.
 
 ## Help test and follow development
 
@@ -60,7 +108,7 @@ Native warm-plan adoption remains unaccepted. Records with unknown compiler targ
 
 ## Build from source
 
-Use the [complete build guide](BUILDING.md) for owned inputs, full-preparation settings, storage and concurrency limits. Run these launcher commands from the repository root:
+The [install guide](#install-guide) above covers first-time setup. Use the [complete build guide](BUILDING.md) for owned inputs, full-preparation settings, storage and concurrency limits. Run these launcher commands from the repository root:
 
 Build the native product app:
 
