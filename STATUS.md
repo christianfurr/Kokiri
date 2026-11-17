@@ -33,3 +33,7 @@ The published v28 dataset contains 24,361 render, 4,512 shader-variant, 623 comp
 - [Shell releases](release/README.md), [runtime source updates](release/runtime-updates.md) and [integration acceptance](docs/integration-acceptance.md): remaining delivery and gameplay gates.
 
 Existing screenshots retain their original capture dates. The website HUD uses illustrative values. Keep game assets, extracted shaders, saves, private logs and credentials out of public reports.
+
+## MCP preview packaging
+
+The source/MCP preview includes the default observation server and a separate, unregistered disposable-development workbench. 84 locked MCP tests passed on macOS, including native process verification. Default development workspaces use a separate KokiriDevelopment root. Actual live development-runtime isolation/control acceptance remains gated; source availability does not authorize player control. See [preview notes](release/preview-0.1.0.md).

@@ -282,14 +282,15 @@ class NativeProcessTests(unittest.TestCase):
     def test_actual_libproc_matches_sdk_c_layout(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);source=root/'probe.c';binary=root/'probe'
-            source.write_text('#include <libproc.h>\n#include <sys/resource.h>\n#include <stdlib.h>\n#include <stdio.h>\nint main(int argc,char **argv){if(argc!=2)return 2;struct rusage_info_v4 r={0};if(proc_pid_rusage(atoi(argv[1]),RUSAGE_INFO_V4,(rusage_info_t *)&r))return 3;printf("%llu %llu\\n",(unsigned long long)r.ri_proc_start_abstime,(unsigned long long)r.ri_phys_footprint);return 0;}\n')
+            source.write_text('#include <libproc.h>\n#include <sys/resource.h>\n#include <stdlib.h>\n#include <stdio.h>\nint main(int argc,char **argv){if(argc!=2)return 2;struct rusage_info_v4 r={0};if(proc_pid_rusage(atoi(argv[1]),RUSAGE_INFO_V4,(rusage_info_t *)&r))return 3;char path[PROC_PIDPATHINFO_MAXSIZE]={0};if(proc_pidpath(atoi(argv[1]),path,sizeof(path))<=0)return 4;printf("%llu %llu\\n%s\\n",(unsigned long long)r.ri_proc_start_abstime,(unsigned long long)r.ri_phys_footprint,path);return 0;}\n')
             subprocess.run(['xcrun','clang','-Wall','-Wextra','-Werror',str(source),'-o',str(binary)],check=True,capture_output=True)
-            start,footprint=map(int,subprocess.check_output([str(binary),str(os.getpid())],text=True).split())
+            metrics,executable=subprocess.check_output([str(binary),str(os.getpid())],text=True).splitlines()
+            start,footprint=map(int,metrics.split())
             sample=ProcessReader().sample(os.getpid())
             self.assertEqual(start,sample['process_start'])
             self.assertGreater(sample['physical_footprint_bytes'],0)
             self.assertLess(abs(footprint-sample['physical_footprint_bytes']),16<<20)
-            self.assertIn('Python',sample['executable'])
+            self.assertEqual(executable,sample['executable'])
 
 
 if __name__=='__main__':unittest.main()
