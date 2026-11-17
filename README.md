@@ -69,6 +69,10 @@ The launcher is built at `macos/build/Kokiri.app` and locally signed ad hoc. Kee
 
 ### 3. Build your private game app
 
+You can prepare the game in the launcher: on first launch, choose **Add Game**, select your game files and firmware fonts, then choose **Prepare Game**. Select this Kokiri source folder when prompted. Once a game is connected, preparation is available under **Settings → Manage Game… → Prepare from Game Files…**. The preview still needs the build tools listed above. Default work and game locations stay outside the repository; you can change them there.
+
+Alternatively, use Terminal:
+
 Replace the example paths below with absolute paths to your own files and fresh work/output locations **outside the repository**. Quit gameplay first and run only one heavy build at a time.
 
 ```sh
@@ -84,7 +88,7 @@ These settings request full shader preparation. Wait for successful completion b
 
 ### 4. Connect and play
 
-1. In Kokiri, choose **Set Up Game**, then **Connect App…** and select your built `Kokiri Game.app` or a compatible native MacNativeGames app.
+1. On first launch, choose **Connect Existing App…** (or **Settings → Manage Game… → Connect Another Game…** afterward) and select your built `Kokiri Game.app` or a compatible native MacNativeGames app.
 2. To continue an existing save, close the game and use **Import Profile…** to select the complete profile folder. Kokiri copies it and refuses to replace an existing Kokiri profile; your original stays in place.
 3. Choose **Play Game** from Home. On matching Kokiri runtimes, **key 1** opens the in-game settings and HUD controls. The **L3 + R3** controller shortcut still needs physical-controller verification.
 

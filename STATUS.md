@@ -13,6 +13,12 @@ Updated **2026-11-16**. Launcher implementation reviewed at [`e580518`](https://
 | Automatic updates | Sparkle shell packaging and a separate signed runtime-source update path have local tests, including rejection and diagnostic rollback | Actual full-v28 game update/relaunch/rollback, production feeds, Developer ID signing and notarization |
 | Public distribution | Reviewed source, documentation, static website and source-only launcher CI artifacts | Stable signed/notarized app release; game content and compiled shader packs are private |
 
+## Guided setup preview
+
+The launcher now opens a compact first-run setup flow for new users, opens Home directly for configured games, and places game management in Settings. Missing games retain their connection for recovery. Draft selections persist locally; replacement connections are verified and saved before activation. Home prioritizes Play, session information and saves.
+
+The setup batch passed 42 native tests, a release build, strict signature verification and review. Returning-user navigation, the management sheet and cancellation were inspected in the native app. Clean-Mac full game import and bundled preparation tools remain pending; this source preview still requires Xcode and Python 3.14. See the [setup review](.cairn/features/2026-11-16-guided-setup/REVIEW.md).
+
 ## Preparation identity and counts
 
 The private game uses renderer source `4b25230a95097a44ad509f96e75c467e6b534de8` and packaging/accounting source `d8db59078a42e03c3f48a6b907895d601714936f`. Its final signed executable SHA-256 is `62924a157332b6ef554bbbba29b7a7be73ee005178f364c1185a72a9fbea0e5c`; full preparation receipt SHA-256 is `62bf2df573af4055c4c56f61f049ce421db20abdfa37b6b9f871e50152f75f85`. The launcher is a separate artifact.
