@@ -1,5 +1,5 @@
 ---
-verified_at_sha: 5bb5ccc
+verified_at_sha: ce77330
 verified_at: 2026-11-17
 ---
 # Kokiri
