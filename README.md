@@ -31,7 +31,7 @@ Kokiri also develops an **open shader and pipeline catalog** that compatible pro
 
 ## Install guide
 
-Kokiri currently requires a source build. There is no stable signed/notarized installer. The launcher and your private game app are separate builds; if you already have a compatible native game app, skip step 3.
+An [experimental prebuilt launcher](https://github.com/christianfurr/Kokiri/releases/tag/v0.1.0-preview.2) is available for manual installation. It is ad-hoc signed and not notarized; see the [download and first-launch notes](release/preview-0.1.0-2.md). Preparing a new game still requires the source checkout and build tools below. There is no stable signed/notarized installer. The launcher and your private game app are separate builds; if you already have a compatible native game app, skip step 3.
 
 | Requirement | Current support |
 | --- | --- |
@@ -40,7 +40,7 @@ Kokiri currently requires a source build. There is no stable signed/notarized in
 | Build tools | Full Xcode with Metal toolchain; Python 3.14 or later for the game builder |
 | Game input | Your own Nintendo Switch 2 dump, title `0400486024DEC000`, update `131072` |
 | Other inputs | Your own six required shared firmware fonts and manifest; see the [build guide](BUILDING.md) |
-| Distribution | Source preview; no stable, notarized download yet |
+| Distribution | Experimental unnotarized launcher; no stable notarized download yet |
 
 **This build does not accept an N64 or Nintendo 3DS ROM.** Game files, firmware fonts and generated game apps are not distributed in this repository.
 

@@ -36,3 +36,5 @@
 - 2026-11-16: Setup follows game files, extracted firmware fonts, then preparation. Use external default storage and keep developer paths under build details. Fast picker checks do not replace builder integrity checks; the source preview still needs Xcode/Python and does not import raw firmware archives.
 
 - 2026-11-16: User approved setup as first-run onboarding without main navigation, with game management in Settings and no permanent Setup tab. Retain missing installation bindings for recovery, persist draft inputs, and commit replacement bindings only after inspection and successful preference persistence.
+
+- 2026-11-16: User chose an untrusted-developer-style app download for the preview. Permit an explicitly unnotarized, ad-hoc-signed manual launcher ZIP with checksums and payload admission; preserve all production Developer ID/notarization/appcast requirements. Game preparation tools remain source-based.
