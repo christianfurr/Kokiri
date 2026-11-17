@@ -37,6 +37,8 @@ struct MainView: View {
                 Group {
                     switch model.selection ?? .home {
                     case .home: HomeView()
+                    case .mods: ModsView(model: model.mods).disabled(model.busy || model.building)
+                    case .saves: SavesView(profileFolder: model.profileFolder)
                     case .performance: PerformanceView()
                     case .shaders: ShaderLibraryView()
                     case .settings: SettingsView()
@@ -47,7 +49,7 @@ struct MainView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(action: model.play) { Label(model.running ? "Return to Game" : "Play", systemImage: "play.fill") }
-                    .disabled(model.busy || model.building || (model.installation == nil && !model.running))
+                    .disabled(model.busy || model.building || model.mods.busy || (model.installation == nil && !model.running))
             }
         }
         .sheet(isPresented: $model.setupPresented) {

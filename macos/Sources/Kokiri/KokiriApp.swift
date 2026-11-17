@@ -36,7 +36,7 @@ enum ProductIdentity {
                 Button("Open Performance Recording…", action: model.chooseRecording).keyboardShortcut("o", modifiers: [.command, .shift])
                 Divider()
                 Button(model.running ? "Bring Game Forward" : "Play", action: model.play)
-                    .keyboardShortcut("r").disabled(model.busy || model.building)
+                    .keyboardShortcut("r").disabled(model.busy || model.building || model.mods.busy)
             }
         }
 

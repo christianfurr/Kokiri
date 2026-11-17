@@ -25,6 +25,56 @@ final class HumanPreviewTests: XCTestCase {
         XCTAssertEqual(try HumanPreviewBinding.selected(arguments: ["Kokiri"], resource: value.file)?.root, value.root.path)
     }
 
+    func testProfileLocationSeparatesOrdinaryMissingAndValidPrivateBindings() throws {
+        XCTAssertEqual(ProfileLocation.resolve(previewRequested: false, binding: nil)?.path, KokiriPaths.profile.path)
+        XCTAssertNil(ProfileLocation.resolve(previewRequested: true, binding: nil))
+        let value = try fixture(), binding = try HumanPreviewBinding.load(value.file)
+        XCTAssertEqual(ProfileLocation.resolve(previewRequested: true, binding: binding)?.path,
+                       value.root.appendingPathComponent("profile").path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: value.root.appendingPathComponent("profile").path))
+        XCTAssertEqual(ProfileLocation.resolve(previewRequested: false, binding: binding)?.path, KokiriPaths.profile.path)
+    }
+
+    @MainActor func testUnavailablePrivatePreviewCannotReadConsentOrEnableCatalog() async {
+        let facade = CatalogFacade.unavailablePreview()
+        XCTAssertFalse(facade.allowsContributions)
+        XCTAssertFalse(facade.configured)
+        XCTAssertFalse(facade.ready)
+        XCTAssertNil(facade.consent)
+        XCTAssertNil(facade.queued)
+        XCTAssertNil(facade.origin)
+        await facade.choose(true)
+        await facade.reload()
+        XCTAssertNil(facade.consent)
+        XCTAssertFalse(facade.ready)
+        XCTAssertFalse(facade.choicePending)
+    }
+
+    func testInvalidBindingCannotResolveToOrdinaryProfile() throws {
+        let value = try fixture()
+        for file in [value.base.appendingPathComponent("missing.json"), value.file] {
+            if file == value.file { try Data("{}".utf8).write(to: file) }
+            let binding = try? HumanPreviewBinding.load(file)
+            XCTAssertNil(ProfileLocation.resolve(previewRequested: true, binding: binding))
+        }
+    }
+
+    func testProfileLocationRevalidatesChangedAndRemovedPrivateMarkers() throws {
+        let value = try fixture(), binding = try HumanPreviewBinding.load(value.file)
+        let marker = value.root.appendingPathComponent("preview.json")
+        let valid = try Data(contentsOf: marker)
+        for key in ["session_id", "executable_sha256", "owner"] {
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: valid) as? [String: Any])
+            object[key] = "mismatch"
+            try JSONSerialization.data(withJSONObject: object).write(to: marker)
+            XCTAssertNil(ProfileLocation.resolve(previewRequested: true, binding: binding), key)
+            try valid.write(to: marker)
+            XCTAssertNotNil(ProfileLocation.resolve(previewRequested: true, binding: binding))
+        }
+        try FileManager.default.removeItem(at: marker)
+        XCTAssertNil(ProfileLocation.resolve(previewRequested: true, binding: binding))
+    }
+
     func testCLIBindingAndCleanFixedHelperPlan() throws {
         let value = try fixture()
         let binding = try XCTUnwrap(HumanPreviewBinding.selected(arguments: ["Kokiri", "--human-preview", value.file.path], resource: nil))

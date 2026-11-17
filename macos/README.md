@@ -16,7 +16,17 @@ First-run setup opens without the sidebar and guides users through game files, f
 
 Setup connects a compatible game app or invokes `engine/build.py` using explicit file arguments. It never puts game output inside this repository. Import Save Profile copies the whole selected profile only when the game is closed, verifies its contents, and refuses to replace an existing Kokiri profile. Tests use temporary synthetic profiles only.
 
-The normal game starts with Kokiri's own profile and the shared cross-app game slot. It receives no resolution, frame-rate, mod, focus or input overrides. Folder-based save sync is disabled; Kokiri has no cloud-save product. In-game settings remain authoritative.
+The normal game starts with Kokiri's own player profile and the shared cross-app game slot. Mods has a separate library and named loadout profiles; a compatible ordinary runtime receives a verified copy of the selected overlay for that launch. It receives no resolution, frame-rate, focus or input overrides. Folder-based save sync is disabled; Kokiri has no cloud-save product. In-game settings remain authoritative.
+
+## Mods and Saves
+
+Mods manages Kokiri's own local library. Import copies compatible RomFS packs or the local MacNative Mods OoT library; it does not alter that app's packs or profiles. Named mod profiles store enabled packs and load order separately from player saves. Changes apply to a later launch, never to a running game. Unsupported formats and incompatible runtimes show an error rather than claiming the profile was applied.
+
+Applying an enabled profile requires the runtime's explicit integer `KokiriRomFSModsVersion=1` capability. New ordinary source builds advertise it only when packaging the exact runtime just produced by that build. Older/unadvertised apps and shader-only repackages stay unsupported; an empty loadout can still play without mods. The marker describes overlay support, not in-game verification of a particular pack.
+
+The accepted private human-preview runtime explicitly disables mod overlays. Its Mods tab can manage the library and profiles, but clearly shows that this connected preview cannot apply them. Ordinary unmodded Play remains available. Supporting mods in that private runtime requires a separately tested runtime upgrade; changing launcher environment variables cannot enable it.
+
+Saves displays the exact connected player profile, including its private playtest lineage when bound. It reads save-slot details and any embedded preview locally, with manual refresh and per-file errors. This is a read-only viewer: it does not edit, restore, delete, migrate or overwrite saves. Missing or unsupported saves stay visible as such rather than falling back to another profile.
 
 Detailed frame recording is **off by default** for ordinary play. When enabled, Performance reads bounded timing tails (`DM_NVN_TSV_CALLS=0`) and excludes generated and duplicate presentation timestamps. Process physical footprint (using the installed SDK's libproc ABI) and read-only serialized position samples remain available without detailed recording. Rates are live observations, not certified benchmarks. A bridge connection or position does not prove unpaused gameplay. Detailed collection has overhead and its setting applies to the next session.
 

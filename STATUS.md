@@ -43,3 +43,7 @@ Existing screenshots retain their original capture dates. The website HUD uses i
 ## MCP preview packaging
 
 The source/MCP preview includes the default observation server and a separate, unregistered disposable-development workbench. 84 locked MCP tests passed on macOS, including native process verification. Default development workspaces use a separate KokiriDevelopment root. Actual live development-runtime isolation/control acceptance remains gated; source availability does not authorize player control. See [preview notes](release/preview-0.1.0.md).
+
+## Mods and Saves preview
+
+The next experimental launcher preview adds compact Mods profiles/imports and read-only Saves while retaining Guided Setup. Ordinary mod launch requires explicit capability; existing private human previews remain library-only. Invalid private bindings fail closed for saves, reveals and catalog state. Runtime/gameplay compatibility and normal private-bound launch are separate acceptance gates. See [Preview 3 notes](release/preview-0.1.0-3.md).

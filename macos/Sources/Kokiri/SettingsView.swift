@@ -15,12 +15,13 @@ struct SettingsView: View {
                         if let app = model.preferences.installation?.app { Button("Show in Finder") { model.reveal(app) } }
                     }.disabled(!model.canManageGame)
                 }
-                LabeledContent("Player profile", value: model.profileFolder.path).textSelection(.enabled)
+                LabeledContent("Player profile", value: model.profileFolder?.path ?? "Connected player profile unavailable").textSelection(.enabled)
                 Text("Kokiri uses a separate profile. Import copies the complete selected folder; it never replaces an existing Kokiri profile.").font(.caption).foregroundStyle(.secondary)
                 HStack {
                     if !model.isPlaytest { Button("Import Save Profile…", action: model.importProfile).disabled(!model.canImportProfile) }
-                    Button("Show Saves") { model.reveal(model.profileFolder) }
-                    Button("Show Game Data") { model.reveal(model.gameDataFolder) }
+                    Button("View Saves") { model.selection = .saves }
+                    Button("Show Saves in Finder", action: model.revealProfile).disabled(model.profileFolder == nil)
+                    Button("Show Game Data", action: model.revealGameData).disabled(model.gameDataFolder == nil)
                 }
             }
             Section("Session observations") {

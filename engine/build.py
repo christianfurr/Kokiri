@@ -722,7 +722,7 @@ def verify_staged_preparation_inputs(app,receipt):
         if actual!=receipt['artifact_sha256'].get(key):
             raise ValueError('staged preparation input differs from verified receipt: '+key)
 
-def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=None,mode=None,learned_caches=(),private_capabilities=None):
+def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=None,mode=None,learned_caches=(),private_capabilities=None,compiled_runtime_sha256=None):
     """Stage a sealed App containing its runtime data, then replace the closed App. mode: shader_mode, recorded in the
     App (MNGShaders) for its updates and MNG Launcher. Private full builds read their owned output metadata;
     staged updates pass the source app's validated declarations before sealing the new runtime."""
@@ -772,6 +772,10 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
     clone_file(work/'build/oot-native',mac/RUNTIME_EXECUTABLE)
     if sha(mac/RUNTIME_EXECUTABLE)!=receipt['artifact_sha256']['runtime_sha256']:
         raise ValueError('staged runtime differs from the verified build input')
+    # Only callers that just built this source may advertise overlay support.
+    # Shader-only repackaging and arbitrary existing executables fail closed.
+    if compiled_runtime_sha256 is not None and compiled_runtime_sha256!=sha(mac/RUNTIME_EXECUTABLE):
+        raise ValueError('compiled runtime changed before mod capability packaging')
     if pipelines:shutil.copytree(pipelines,data/'build/pipelines',copy_function=clone_file)
     for rel in ('build/game-data/oot','build/shader-service','extracted/oot/exefs',
                 'extracted/firmware/shared-fonts'):
@@ -811,6 +815,10 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
     clone_file(GAME/'third_party/dav1d-COPYING',res/'licenses/dav1d-COPYING')
     info=runtime_metadata(mode,exact_source_commit())
     info.update(private_capabilities)
+    if compiled_runtime_sha256 is not None and not private_capabilities:
+        # app/launcher.m preserves TOTK_ROMFS_MODS; runtime/romfs.c validates
+        # each overlay manifest. The private entry still explicitly disables it.
+        info['KokiriRomFSModsVersion']=1
     icon=tree/'build/KokiriAppIcon.icns'
     subprocess.run(['bash',GAME.parent/'macos/scripts/create_icon.sh',
                     GAME.parent/'assets/brand/kokiri-mark.png',icon],check=True)
@@ -950,6 +958,7 @@ def update_runtime(app,work=None,out=None,shared=None,learned_caches=()):
     env=dict(os.environ,DM_RULESET='native',DM_PRIVATE_GATES='0')
     with (logs/'native-runtime.log').open('w') as f:
         subprocess.run(['make','-C',GAME,'WORK='+str(make_path(work)),'-j'+str(shader_jobs())],cwd=work,stdout=f,stderr=subprocess.STDOUT,check=True,env=env)
+    compiled_runtime_sha256=sha(work/'build/oot-native')
     def run(cmd,name,cwd=tree):
         print(name,flush=True)
         ensure_disk_space(work)
@@ -962,7 +971,7 @@ def update_runtime(app,work=None,out=None,shared=None,learned_caches=()):
         # Staging must never publish into the original player's mutable library.
         folder=work/'staged-game-data'
     package_app(work,tree,destination,'library' if folder else 'app',folder,mode=mode,shared=shared,learned_caches=learned_caches,
-                private_capabilities=private_capabilities)
+                private_capabilities=private_capabilities,compiled_runtime_sha256=compiled_runtime_sha256)
     print(f'built {destination} in {time.monotonic()-start:.0f} s',flush=True)
 
 def update_shaders(app,listfile,work=None):
@@ -1141,6 +1150,7 @@ def build(args, source):
     shutil.copy2(proof.with_name('SPIRV-Tools.LICENSE'),service/'SPIRV-Tools.LICENSE')
     (tree/'build/shader-map.tsv').write_text('# TOTK control-code-sha256-v1\n')
     run(['make','-C',GAME,'WORK='+str(make_path(work)),'-j'+str(shader_jobs())],'native-runtime',work)
+    compiled_runtime_sha256=sha(work/'build/oot-native')
     mode='full' if device else shader_mode()
     if mode=='none':print('Shaders are not bundled (OOT_BUNDLE_SHADERS=0): translated at first use',flush=True)
     else:
@@ -1153,7 +1163,8 @@ def build(args, source):
      remove_device_reminder()
     else:
      package_app(work,tree,out,'library' if args.mac_game_data_folder else args.mac_game_data,args.mac_game_data_folder,mode=mode,
-                 shared=getattr(args,'shader_list',None),learned_caches=getattr(args,'learned_cache',()))
+                 shared=getattr(args,'shader_list',None),learned_caches=getattr(args,'learned_cache',()),
+                 compiled_runtime_sha256=compiled_runtime_sha256)
     print(f'Built {out}; native gameplay validation is recorded separately.',flush=True)
     chain=re.search(r'#define DMSH_CHAIN "([^"]+)"\s*/\* game: oot\b',(GAME/'third_party/d2r_gfx/gfx/nvn/dmsh_chain.h').read_text())[1]   # the shared layer's line for this game
     return out,tree,expected,chain

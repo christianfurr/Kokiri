@@ -6,11 +6,13 @@ import UniformTypeIdentifiers
 import CryptoKit
 
 enum Destination: String, CaseIterable, Identifiable {
-    case home = "Home", performance = "Performance", shaders = "Shader Library", settings = "Settings"
+    case home = "Home", mods = "Mods", saves = "Saves", performance = "Performance", shaders = "Shader Library", settings = "Settings"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .home: "leaf"
+        case .mods: "shippingbox"
+        case .saves: "externaldrive"
         case .performance: "waveform.path.ecg"
         case .shaders: "square.stack.3d.up"
         case .settings: "slider.horizontal.3"
@@ -51,13 +53,17 @@ enum Destination: String, CaseIterable, Identifiable {
     @Published var hud = HUDPreferences()
     let updates = UpdateService()
     let catalog: CatalogFacade
+    let mods = ModsModel()
 
     private var loadingSetupDraft = true
     private let preferenceFile = KokiriPaths.support.appendingPathComponent("launcher.json")
     private let humanPreview: HumanPreviewBinding?
     private let humanPreviewRequested: Bool
     private var humanPreviewError: String?
-    private var hudFolder: URL { humanPreview?.settingsURL ?? KokiriPaths.game }
+    private var hudFolder: URL? {
+        humanPreviewRequested ? gameDataFolder?.appendingPathComponent("settings/game") : KokiriPaths.game
+    }
+    private var lastProfileFolder: URL?
     private var sampleStart: UInt64?
     private var activeInstallation: GameInstallation?
     private var tails: [String: LineTail] = [:]
@@ -69,6 +75,8 @@ enum Destination: String, CaseIterable, Identifiable {
     private var catalogCheckpoint: RuntimeMetadataCheckpoint?
     private var catalogContext: Data?
     private var catalogObservation: AnyCancellable?
+    private var modsObservation: AnyCancellable?
+    private var modsContextGameRunning = false
 
     init() {
         let arguments = ProcessInfo.processInfo.arguments
@@ -87,9 +95,14 @@ enum Destination: String, CaseIterable, Identifiable {
         }
         if let binding {
             catalog = CatalogFacade(store: binding.rootURL.appendingPathComponent("Catalog"), allowsContributions: false)
+        } else if humanPreviewRequested {
+            catalog = CatalogFacade.unavailablePreview()
         } else { catalog = CatalogFacade() }
-        hud = HUDPreferences.read(from: binding?.settingsURL ?? KokiriPaths.game)
+        hud = binding.map { HUDPreferences.read(from: $0.settingsURL) }
+            ?? (humanPreviewRequested ? HUDPreferences() : HUDPreferences.read(from: KokiriPaths.game))
+        lastProfileFolder = ProfileLocation.resolve(previewRequested: humanPreviewRequested, binding: binding)
         catalogObservation = catalog.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        modsObservation = mods.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         if !humanPreviewRequested, let data = try? Data(contentsOf: KokiriPaths.support.appendingPathComponent("setup-draft.json")),
            let draft = try? JSONDecoder().decode(SetupDraft.self, from: data) {
             setupGame = draft.game; setupFonts = draft.fonts; setupWork = draft.work; setupOutput = draft.output
@@ -124,8 +137,8 @@ enum Destination: String, CaseIterable, Identifiable {
     }
 
     var isPlaytest: Bool { humanPreviewRequested }
-    var profileFolder: URL { humanPreview?.rootURL.appendingPathComponent("profile") ?? KokiriPaths.profile }
-    var gameDataFolder: URL { humanPreview?.rootURL ?? KokiriPaths.game }
+    var profileFolder: URL? { ProfileLocation.resolve(previewRequested: humanPreviewRequested, binding: humanPreview) }
+    var gameDataFolder: URL? { humanPreviewRequested ? profileFolder?.deletingLastPathComponent() : KokiriPaths.game }
     var canImportProfile: Bool { !humanPreviewRequested && !busy && !anyGameRunning }
     var collectedRecipeCount: Int { collectedShaderCounts.values.reduce(0, +) }
     var running: Bool { runtime?.isTerminated == false }
@@ -135,10 +148,13 @@ enum Destination: String, CaseIterable, Identifiable {
         }
     }
     var installation: GameInstallation? {
-        if humanPreviewRequested { return humanPreview.flatMap { try? GameInstallation.inspect($0.appURL) } }
+        if humanPreviewRequested {
+            guard profileFolder != nil else { return nil }
+            return humanPreview.flatMap { try? GameInstallation.inspect($0.appURL) }
+        }
         return installationUnavailable ? nil : preferences.installation
     }
-    var canManageGame: Bool { !isPlaytest && !busy && !building && !anyGameRunning }
+    var canManageGame: Bool { !isPlaytest && !busy && !building && !mods.busy && !anyGameRunning }
     var supportsHUD: Bool { installation.flatMap { Bundle(url: $0.app)?.object(forInfoDictionaryKey: "KokiriHUDPreferencesVersion") as? Int } == 1 }
     var stateTitle: String {
         if running, activeInstallation?.supportsLiveStatus != true { return "Game running" }
@@ -154,7 +170,7 @@ enum Destination: String, CaseIterable, Identifiable {
         do { try preferences.save(to: preferenceFile) } catch { message = error.localizedDescription }
     }
     func refreshInstallation() {
-        if humanPreviewRequested { refreshShaders(); return }
+        if humanPreviewRequested { refreshShaders(); refreshModsContext(); return }
         if let selected = preferences.installation {
             do {
                 preferences.installation = try GameInstallation.inspect(selected.app)
@@ -164,6 +180,13 @@ enum Destination: String, CaseIterable, Identifiable {
             catch { installationUnavailable = true; message = "Your connected game could not be opened. Locate it or reconnect its drive, then try again." }
         }
         refreshShaders()
+        refreshModsContext()
+    }
+    func refreshModsContext() {
+        modsContextGameRunning = anyGameRunning
+        mods.setContext(installation: installation,
+                        gameRunning: modsContextGameRunning,
+                        launchSupported: !humanPreviewRequested)
     }
     private func persistSetupDraft() {
         guard !loadingSetupDraft, !humanPreviewRequested else { return }
@@ -189,6 +212,7 @@ enum Destination: String, CaseIterable, Identifiable {
             preferences = try InstallationConnection.connect(url, preferences: preferences, savingTo: preferenceFile)
             installationUnavailable = false
             refreshShaders(); setupReady = onboarding || setupPresented
+            refreshModsContext()
             message = nil
         } catch { message = error.localizedDescription }
     }
@@ -216,6 +240,14 @@ enum Destination: String, CaseIterable, Identifiable {
         return panel.runModal() == .OK ? panel.url : nil
     }
     func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+    func revealProfile() {
+        guard let folder = profileFolder else { message = "The connected player profile is unavailable."; return }
+        reveal(folder)
+    }
+    func revealGameData() {
+        guard let folder = gameDataFolder else { message = "The connected game data is unavailable."; return }
+        reveal(folder)
+    }
     func importProfile() {
         guard !humanPreviewRequested else { message = "Your copied player profile is already connected."; return }
         guard !busy, !building else { return }
@@ -238,14 +270,15 @@ enum Destination: String, CaseIterable, Identifiable {
 
     func play() {
         if let runtime, !runtime.isTerminated { runtime.activate(options: [.activateAllWindows]); return }
-        guard !busy, !building else { return }
+        guard !busy, !building, !mods.busy else { return }
         if reconnectHumanPreview() { runtime?.activate(options: [.activateAllWindows]); return }
         guard !anyGameRunning else { message = "Another game session is running. Finish it before starting Kokiri’s profile."; return }
         if humanPreviewRequested { playHumanPreview(); return }
         guard let selected = installation else { if installationUnavailable { refreshInstallation() } else { beginSetup() }; return }
         busy = true
+        refreshModsContext()
         Task {
-            defer { busy = false }
+            defer { busy = false; refreshModsContext() }
             do {
                 let verified = try GameInstallation.inspect(selected.app)
                 let folder = KokiriPaths.sessions.appendingPathComponent(ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-") + "-" + UUID().uuidString.prefix(8))
@@ -257,11 +290,14 @@ enum Destination: String, CaseIterable, Identifiable {
                     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
                 }
                 let configuration = NSWorkspace.OpenConfiguration()
-                // No graphics, mod, shader, focus or player-input overrides.
+                // Graphics and input remain controlled by the game. The selected
+                // mod profile is copied to a separate immutable session overlay.
                 var environment = ["TOTK_PROFILE_DIR": KokiriPaths.profile.path,
                                    "TOTK_GAME_SLOT_DIR": KokiriPaths.sharedSlot.path,
                                    "TOTK_INPUT_FILE": input.path, "OOT_EDITOR_STATUS": status.path,
                                    "TOTK_CLOUD_SAVE_DIR": "0"]
+                guard let dataFolder = gameDataFolder else { throw KokiriError.message("The connected game data is unavailable.") }
+                environment.merge(try await mods.prepareLaunch(app: verified.app, gameDataFolder: dataFolder, sessionFolder: folder)) { _, new in new }
                 if preferences.observeSessions {
                     environment["DM_NVN_TSV"] = folder.appendingPathComponent("timings.tsv").path
                     environment["DM_NVN_TSV_CALLS"] = "0"
@@ -368,6 +404,13 @@ enum Destination: String, CaseIterable, Identifiable {
     }
 
     private func tick() {
+        let currentProfile = profileFolder
+        if currentProfile != lastProfileFolder {
+            lastProfileFolder = currentProfile
+            objectWillChange.send()
+            refreshModsContext()
+        }
+        if anyGameRunning != modsContextGameRunning { refreshModsContext() }
         guard let runtime else { return }
         if runtime.isTerminated {
             let endedInstallation = activeInstallation
@@ -443,7 +486,7 @@ enum Destination: String, CaseIterable, Identifiable {
         Task { await catalog.choose(choice) }
     }
     func updateHUD(_ change: (inout HUDPreferences) -> Void) {
-        guard supportsHUD, !anyGameRunning else { message = "Close the matching Kokiri game before changing its HUD."; return }
+        guard supportsHUD, !anyGameRunning, let hudFolder else { message = "Close the matching Kokiri game before changing its HUD."; return }
         var value = HUDPreferences.read(from: hudFolder); change(&value)
         do { try value.save(to: hudFolder); hud = value }
         catch { message = error.localizedDescription }
@@ -452,7 +495,11 @@ enum Destination: String, CaseIterable, Identifiable {
         catalog.selectRuntime(installation?.app)
         guard !shaderRefreshPending else { return }
         let app = installation?.app
-        let cache = humanPreview?.rootURL.appendingPathComponent("cache") ?? KokiriPaths.game.appendingPathComponent("shader-cache")
+        guard let dataFolder = gameDataFolder else {
+            shaderCounts = [:]; collectedShaderCounts = [:]; preparation = nil
+            return
+        }
+        let cache = humanPreviewRequested ? dataFolder.appendingPathComponent("cache") : dataFolder.appendingPathComponent("shader-cache")
         shaderRefreshPending = true
         Task {
             let result = await Task.detached(priority: .utility) {
@@ -534,7 +581,7 @@ enum Destination: String, CaseIterable, Identifiable {
                 if finished.terminationStatus == 0 {
                     do {
                         self.preferences = try InstallationConnection.connect(output, preferences: self.preferences, savingTo: self.preferenceFile)
-                        self.installationUnavailable = false; self.setupReady = true; self.refreshShaders(); self.buildSucceeded = true; self.buildStage = "Game built and connected"
+                        self.installationUnavailable = false; self.setupReady = true; self.refreshShaders(); self.refreshModsContext(); self.buildSucceeded = true; self.buildStage = "Game built and connected"
                     } catch { self.buildStage = "Build ended; app verification failed"; self.message = error.localizedDescription }
                 } else { self.buildStage = "Build stopped (exit \(finished.terminationStatus))" }
             }

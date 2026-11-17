@@ -28,6 +28,12 @@ import Foundation
     public convenience init() {
         self.init(store: KokiriPaths.support.appendingPathComponent("Catalog"), allowsContributions: true)
     }
+    /// No client, queue, consent lookup or network work for an invalid private binding.
+    public static func unavailablePreview() -> CatalogFacade {
+        let facade = CatalogFacade(configurationError: "The connected playtest could not be verified. Catalog access is unavailable.")
+        facade.allowsContributions = false
+        return facade
+    }
     public convenience init(store: URL, allowsContributions: Bool) {
         let endpoint = (Bundle.main.object(forInfoDictionaryKey: "KokiriCatalogOrigin") as? String).flatMap(URL.init(string:))
         let encodedKeys = Bundle.main.object(forInfoDictionaryKey: "KokiriCatalogPublicKeys") as? [String: String] ?? [:]

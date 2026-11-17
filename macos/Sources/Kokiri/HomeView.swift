@@ -62,7 +62,7 @@ struct HomeView: View {
                                 .font(.headline).padding(.horizontal, 18).padding(.vertical, 9)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(model.busy || model.building || (!model.running && model.anyGameRunning))
+                        .disabled(model.busy || model.building || model.mods.busy || (!model.running && model.anyGameRunning))
                     }
                 }
             }
@@ -102,10 +102,11 @@ struct HomeView: View {
                 .font(.title3).foregroundStyle(Palette.moss).frame(width: 26)
             VStack(alignment: .leading, spacing: 5) {
                 Text("Saves").font(.headline)
-                Text("Your progress stays on this Mac. Import copies an existing profile.")
+                Text(model.profileFolder == nil ? "The connected player profile is unavailable." : "Your progress stays on this Mac. Import copies an existing profile.")
                     .font(.callout).foregroundStyle(.secondary)
                 HStack {
-                    Button("Show Saves") { model.reveal(model.profileFolder) }
+                    Button("View Saves") { model.selection = .saves }
+                    Button("Show in Finder", action: model.revealProfile).disabled(model.profileFolder == nil)
                     if !model.isPlaytest {
                         Button("Import Profile…", action: model.importProfile).disabled(!model.canImportProfile)
                     }

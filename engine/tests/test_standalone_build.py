@@ -318,7 +318,7 @@ class PrivateRuntimeMetadataTests(unittest.TestCase):
                 with self.subTest(key=key),self.assertRaisesRegex(ValueError,'staged rebuild'):
                     build.update_runtime(source,work=work,out=destination)
 
-    def package(self,capabilities,*,update=False,in_place=False):
+    def package(self,capabilities,*,update=False,in_place=False,compiled=False,damaged=False):
         """Exercise real packaging order with tiny resources and mocked proof/tools."""
         root=self.root;work=root/'work';tree=work/'oot';(work/'logs').mkdir(parents=True)
         runtime=work/'build/oot-native';runtime.parent.mkdir();runtime.write_bytes(b'new compiled runtime fixture')
@@ -376,7 +376,8 @@ class PrivateRuntimeMetadataTests(unittest.TestCase):
             stack.enter_context(patch.object(build.shutil,'copytree',side_effect=copy_tree))
             stack.enter_context(patch.object(build.subprocess,'run',side_effect=command))
             if update:build.update_runtime(source,work=work,out=None if in_place else output)
-            else:build.package_app(work,tree,output,'library',root/'game-data',mode='full')
+            else:build.package_app(work,tree,output,'library',root/'game-data',mode='full',
+                                   compiled_runtime_sha256=('0'*64 if damaged else build.sha(runtime)) if compiled else None)
         info=plistlib.loads((output/'Contents/Info.plist').read_bytes())
         fingerprint=json.loads((work/'logs/package-output.json').read_text())
         self.assertEqual(fingerprint['info_sha256'],build.sha(output/'Contents/Info.plist'))
@@ -400,6 +401,19 @@ class PrivateRuntimeMetadataTests(unittest.TestCase):
     def test_ordinary_full_package_stays_unmarked(self):
         info=self.package({})
         for key in self.capabilities:self.assertNotIn(key,info)
+        self.assertNotIn('KokiriRomFSModsVersion',info)
+
+    def test_compiled_ordinary_runtime_advertises_overlay_support_before_seal(self):
+        info=self.package({},compiled=True)
+        self.assertEqual(info['KokiriRomFSModsVersion'],1)
+
+    def test_changed_compiled_runtime_cannot_advertise_overlay_support(self):
+        with self.assertRaisesRegex(ValueError,'compiled runtime changed'):
+            self.package({},compiled=True,damaged=True)
+
+    def test_private_compiled_runtime_does_not_advertise_overlay_support(self):
+        info=self.package(self.capabilities,compiled=True)
+        self.assertNotIn('KokiriRomFSModsVersion',info)
 
     def test_ordinary_staged_update_stays_unmarked(self):
         info=self.package({},update=True)
