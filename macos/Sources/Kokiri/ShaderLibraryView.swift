@@ -3,14 +3,12 @@ import KokiriCore
 
 struct ShaderLibraryView: View {
     @EnvironmentObject private var model: AppModel
-    private let kinds = [("R", "Render"), ("T", "Tessellation"), ("C", "Compute"), ("M", "Mesh"), ("S", "Shader variants")]
+    private let kinds = [("R", "Render"), ("T", "Tile reads"), ("C", "Compute"), ("M", "Mesh"), ("S", "Shader variants")]
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 HStack(alignment: .top) {
                     PageHeading(eyebrow: "Your game’s shaders", title: "Shader Library", detail: "See what is prepared, what you have collected, and what is available in the public library.")
-                    Button("Refresh", action: model.refreshLibrary).disabled(model.shaderRefreshPending || model.catalog.downloadPending)
-                    Button("Refresh", action: model.refreshLibrary).disabled(model.shaderRefreshPending || model.catalog.downloadPending)
                     Button { model.refreshShaders(); model.catalog.retryDownload() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                         .disabled(model.shaderRefreshPending || model.catalog.downloadPending)
                 }

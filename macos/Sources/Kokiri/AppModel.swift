@@ -82,6 +82,7 @@ enum Destination: String, CaseIterable, Identifiable {
         refreshInstallation()
         if let binding {
             sessionFolder = binding.rootURL
+            reconnectHumanPreview()
             Task {
                 let previous = await Task.detached(priority: .utility) { RecordedSession.recentSnapshot(binding.rootURL) }.value
                 if !running { snapshot = previous }
@@ -185,6 +186,7 @@ enum Destination: String, CaseIterable, Identifiable {
     func play() {
         if let runtime, !runtime.isTerminated { runtime.activate(options: [.activateAllWindows]); return }
         guard !busy, !building else { return }
+        if reconnectHumanPreview() { runtime?.activate(options: [.activateAllWindows]); return }
         guard !anyGameRunning else { message = "Another game session is running. Finish it before starting Kokiri’s profile."; return }
         if humanPreviewRequested { playHumanPreview(); return }
         guard let selected = installation else { selection = .setup; return }
@@ -256,6 +258,32 @@ enum Destination: String, CaseIterable, Identifiable {
         }
     }
 
+    @discardableResult private func reconnectHumanPreview() -> Bool {
+        guard let binding = humanPreview, (try? binding.verifyMarker()) != nil,
+              let verified = try? GameInstallation.inspect(binding.appURL) else { return false }
+        for application in NSRunningApplication.runningApplications(withBundleIdentifier: verified.bundleID) {
+            let pid = application.processIdentifier
+            guard let sample = ProcessSample.read(pid: pid),
+                  ProcessSample.executable(pid: pid) == verified.executable.path,
+                  binding.acknowledges(pid: pid, start: sample.start),
+                  ProcessSample.read(pid: pid)?.start == sample.start else { continue }
+            observeHumanPreview(application, installation: verified, sample: sample, binding: binding, resuming: true)
+            return true
+        }
+        return false
+    }
+
+    private func observeHumanPreview(_ application: NSRunningApplication, installation: GameInstallation,
+                                     sample: ProcessSample, binding: HumanPreviewBinding, resuming: Bool) {
+        runtime = application; activeInstallation = installation; sessionFolder = binding.rootURL; sampleStart = sample.start
+        recording = nil; snapshot = PerformanceSnapshot(); connected = false; timingUpdatedAt = nil
+        locationPending = nil; nextLocation = .distantPast; nextProcessWrite = .distantPast
+        tails = ["timing": LineTail(binding.rootURL.appendingPathComponent("timings.tsv"), startAtEnd: resuming),
+                 "presented": LineTail(binding.rootURL.appendingPathComponent("timings.tsv.presented.tsv"), startAtEnd: resuming),
+                 "status": LineTail(binding.rootURL.appendingPathComponent("status.jsonl"), startAtEnd: resuming)]
+        catalogCheckpoint = nil; catalogContext = nil
+    }
+
     private func playHumanPreview() {
         guard let binding = humanPreview else { message = humanPreviewError ?? "The human playtest binding is unavailable."; return }
         guard let helper = Bundle.main.url(forResource: "human_preview", withExtension: "py") else {
@@ -280,13 +308,7 @@ enum Destination: String, CaseIterable, Identifiable {
                 guard let application, let accepted else {
                     throw KokiriError.message("The game started, but monitoring could not verify its session. The game was left running.")
                 }
-                runtime = application; activeInstallation = verified; sessionFolder = binding.rootURL; sampleStart = accepted.start
-                recording = nil; snapshot = PerformanceSnapshot(); connected = false; timingUpdatedAt = nil
-                locationPending = nil; nextLocation = .distantPast; nextProcessWrite = .distantPast
-                tails = ["timing": LineTail(binding.rootURL.appendingPathComponent("timings.tsv")),
-                         "presented": LineTail(binding.rootURL.appendingPathComponent("timings.tsv.presented.tsv")),
-                         "status": LineTail(binding.rootURL.appendingPathComponent("status.jsonl"))]
-                catalogCheckpoint = nil; catalogContext = nil
+                observeHumanPreview(application, installation: verified, sample: accepted, binding: binding, resuming: false)
                 application.activate(options: [.activateAllWindows]); message = nil
             } catch { message = error.localizedDescription }
         }

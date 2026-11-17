@@ -74,6 +74,17 @@ final class CoreTests: XCTestCase {
         try Data("replacement\n".utf8).write(to: file, options: .atomic)
         XCTAssertEqual(tail.read(), ["replacement"])
     }
+    func testResumedTailSkipsOldSamplesAndStillReadsRotation() throws {
+        let file = try temporary().appendingPathComponent("timing")
+        try Data("old\n".utf8).write(to: file)
+        let tail = LineTail(file, startAtEnd: true)
+        XCTAssertEqual(tail.read(), [])
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd(); try handle.write(contentsOf: Data("new\n".utf8)); try handle.close()
+        XCTAssertEqual(tail.read(), ["new"])
+        try Data("rotated\n".utf8).write(to: file, options: .atomic)
+        XCTAssertEqual(tail.read(), ["rotated"])
+    }
     func testUpdatesRequireHTTPSAndPublicKey() throws {
         let key = Data(repeating: 1, count: 32).base64EncodedString()
         XCTAssertThrowsError(try UpdateConfiguration(feed: nil, publicKey: nil))

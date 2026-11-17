@@ -34,8 +34,8 @@ public struct RuntimePreparation: Sendable {
               completed == CatalogWire.integer(pipelines["requested"]),
               CatalogWire.integer(libraries["failed"]) == 0, CatalogWire.integer(pipelines["failed"]) == 0,
               CatalogWire.integer(pipelines["write_failed"]) == 0, CatalogWire.integer(pipelines["unaccounted"]) == 0,
-              let mesh = CatalogWire.integer(pipelines["mesh_indexed"]), mesh >= 0,
-              mesh == CatalogWire.integer(pipelines["mesh_requested"]), mesh <= completed else {
+              let mesh = CatalogWire.integer(pipelines["mesh_requested"]), mesh >= 0, mesh <= completed,
+              let indexedMesh = CatalogWire.integer(pipelines["mesh_indexed"]), indexedMesh >= mesh else {
             throw KokiriError.message("The game’s preparation receipt could not be verified.")
         }
         let context: [String: Any] = ["game_id": "oot", "game_version": bundle.object(forInfoDictionaryKey: "KokiriGameUpdate") as? String ?? "",

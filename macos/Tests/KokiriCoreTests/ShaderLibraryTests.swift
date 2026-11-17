@@ -19,6 +19,27 @@ private final class ReferenceProtocol: URLProtocol, @unchecked Sendable {
 }
 
 final class ShaderLibraryTests: XCTestCase {
+    func testPreparedReceiptAllowsExtraIndexedMeshButRejectsMissingCoverage() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let hash = String(repeating: "a", count: 64)
+        for (indexed, accepted) in [(2, true), (0, false)] {
+            let app = folder.appendingPathComponent("Game\(indexed).app")
+            let file = app.appendingPathComponent("Contents/Resources/totk/build/game-data/oot/preparation-receipt.json")
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let receipt: [String: Any] = ["schema": "kokiri-preparation-receipt-v1", "prepared": true, "mode": "full", "errors": [], "unresolved_inputs": [],
+                "identity": ["runtime_sha256": hash, "chain": "v28"],
+                "libraries": ["unique_prepared_files": 2, "unique_requested_files": 2, "failed": 0],
+                "pipelines": ["completed": 3, "requested": 3, "failed": 0, "write_failed": 0, "unaccounted": 0, "mesh_requested": 1, "mesh_indexed": indexed]]
+            let data = try JSONSerialization.data(withJSONObject: receipt)
+            try data.write(to: file)
+            let info: [String: Any] = ["CFBundleIdentifier": "test.preparation.\(indexed)", "KokiriPrepared": true, "KokiriShaders": "full", "KokiriBuildRuntimeSHA256": hash,
+                "KokiriPreparationReceiptSHA256": CatalogWire.hash(data), "KokiriGameUpdate": "131072"]
+            try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: app.appendingPathComponent("Contents/Info.plist"))
+            if accepted { XCTAssertEqual(try RuntimePreparation.load(app: app).meshPipelines, 1) }
+            else { XCTAssertThrowsError(try RuntimePreparation.load(app: app)) }
+        }
+    }
     func testLargeMetadataListIncludesRecordsBeyondOldLimitWithoutCountingCommentsOrDuplicates() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

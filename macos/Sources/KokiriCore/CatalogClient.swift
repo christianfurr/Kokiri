@@ -297,10 +297,13 @@ public actor CatalogClient {
     private func request(path: String, body: Data? = nil, limit: Int) async throws -> Data {
         guard let endpoint else { throw KokiriError.message("The public catalog is not configured in this build.") }
         var request = URLRequest(url: endpoint.appendingPathComponent(path))
+        request.setValue("Kokiri-Catalog/1", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.httpMethod = body == nil ? "GET" : "POST"; request.httpBody = body
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (bytes, response) = try await session.bytes(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == (body == nil ? 200 : 202) else { throw KokiriError.message("Catalog request was not accepted.") }
+        guard let http = response as? HTTPURLResponse else { throw KokiriError.message("The catalog returned an invalid response.") }
+        guard http.statusCode == (body == nil ? 200 : 202) else { throw KokiriError.message("Catalog request was not accepted (HTTP \(http.statusCode)).") }
         if response.expectedContentLength > Int64(limit) { throw KokiriError.message("Catalog response exceeds limits.") }
         var data = Data()
         for try await byte in bytes { if data.count == limit { throw KokiriError.message("Catalog response exceeds limits.") }; data.append(byte) }

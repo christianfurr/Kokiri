@@ -84,7 +84,14 @@ public final class LineTail {
     private var offset: UInt64 = 0
     private var partial = Data()
     private(set) var madeProgress = false
-    public init(_ url: URL) { self.url = url }
+    public init(_ url: URL, startAtEnd: Bool = false) {
+        self.url = url
+        if startAtEnd, let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+           attributes[.type] as? FileAttributeType == .typeRegular {
+            inode = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
+            offset = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
+        }
+    }
     public func read() -> [String] {
         madeProgress = false
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
