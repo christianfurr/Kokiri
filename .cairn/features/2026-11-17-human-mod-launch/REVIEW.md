@@ -10,7 +10,7 @@ Verification on the source candidate:
 
 - 65 Swift tests passed under the two-worker CPU grant, including actual launcher-target compilation and synthetic private manifests. The slot was released.
 - 16 mocked clean-helper tests and 16 single-file native isolation tests passed, including tampered payloads, stale session identity, symlinks/hardlinks, restored-mtime edits after open, history bounds and unchanged human control restrictions.
-- Focused seed, resume, library and packaging regressions cover missing/changed inventories, corrupt outputs, compiler drift, cached-only refusal and propagation of archive verification failure before receipt publication.
+- 24 seed, 13 resume, 27 library and 32 packaging regressions passed, covering missing/changed inventories, realistic generated metadata, corrupt outputs, compiler drift, cached-only refusal, stale resume and propagation of archive verification failure before receipt publication. Together with the helper/native fixtures this is 128 focused CPU tests.
 - Actual `romfs.c` passed clang syntax validation with warnings treated as errors. This produced no native runtime.
 - Independent focused source review found no remaining P1/P2 issues after fixing file/manifest mutation, historical snapshot audit growth and generated-seed inventory handling.
 

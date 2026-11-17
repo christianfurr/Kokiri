@@ -1,10 +1,12 @@
 ---
-verified_at_sha: e7be679bf065190a246a72b9820790db5b5de3a1
-verified_at: 2026-11-16
+verified_at_sha: f0cc8191b604ce11bc645204c5cb208a8dd7cf05
+verified_at: 2026-11-17
 ---
 # Kokiri
 
 Independent Mac project. [STATUS.md](../STATUS.md) is the dated public acceptance summary; [BUILDING.md](../BUILDING.md) covers current build/import entry points. The map's documentation and publication routes were checked against the source revision above; acceptance requirements are not completion claims.
+
+The 2026-11-17 refresh covers the human mod launch source/helper/fixture routes. Other acceptance summaries retain their stated historical scope.
 
 - `.cairn/features/2026-11-15-kokiri-foundation/PRD.md`: accepted project scope and verification gates.
 - `.cairn/DECISIONS.md`: product/runtime boundaries and attribution decisions.
