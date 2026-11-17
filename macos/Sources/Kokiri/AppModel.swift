@@ -35,11 +35,15 @@ enum Destination: String, CaseIterable, Identifiable {
     @Published var buildStage = "Not started"
     @Published var building = false
     @Published var buildSucceeded = false
-    @Published var hud = HUDPreferences.read(from: KokiriPaths.game)
+    @Published var hud = HUDPreferences()
     let updates = UpdateService()
-    let catalog = CatalogFacade()
+    let catalog: CatalogFacade
 
     private let preferenceFile = KokiriPaths.support.appendingPathComponent("launcher.json")
+    private let humanPreview: HumanPreviewBinding?
+    private let humanPreviewRequested: Bool
+    private var humanPreviewError: String?
+    private var hudFolder: URL { humanPreview?.settingsURL ?? KokiriPaths.game }
     private var sampleStart: UInt64?
     private var activeInstallation: GameInstallation?
     private var tails: [String: LineTail] = [:]
@@ -53,13 +57,30 @@ enum Destination: String, CaseIterable, Identifiable {
     private var catalogObservation: AnyCancellable?
 
     init() {
-        preferences = LauncherPreferences.load(from: preferenceFile)
+        let arguments = ProcessInfo.processInfo.arguments
+        let resource = Bundle.main.url(forResource: "KokiriHumanPreviewBinding", withExtension: "json")
+        humanPreviewRequested = arguments.contains("--human-preview") || resource != nil
+        var binding: HumanPreviewBinding?
+        do { binding = try HumanPreviewBinding.selected(arguments: arguments, resource: resource) }
+        catch { humanPreviewError = error.localizedDescription }
+        humanPreview = binding
+        if humanPreviewRequested {
+            var previewPreferences = LauncherPreferences()
+            previewPreferences.observeSessions = true
+            preferences = previewPreferences
+        } else {
+            preferences = LauncherPreferences.load(from: preferenceFile)
+        }
+        if let binding {
+            catalog = CatalogFacade(store: binding.rootURL.appendingPathComponent("Catalog"), endpoint: nil, trustedKeys: [:])
+        } else { catalog = CatalogFacade() }
+        hud = HUDPreferences.read(from: binding?.settingsURL ?? KokiriPaths.game)
         catalogObservation = catalog.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         refreshInstallation()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
-        let arguments = ProcessInfo.processInfo.arguments
+        if let error = humanPreviewError { message = error }
         if let at = arguments.firstIndex(of: "--recording"), arguments.indices.contains(at + 1) {
             loadRecording(URL(fileURLWithPath: arguments[at + 1]))
         }
@@ -75,7 +96,10 @@ enum Destination: String, CaseIterable, Identifiable {
             !NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty
         }
     }
-    var installation: GameInstallation? { preferences.installation }
+    var installation: GameInstallation? {
+        if humanPreviewRequested { return humanPreview.flatMap { try? GameInstallation.inspect($0.appURL) } }
+        return preferences.installation
+    }
     var supportsHUD: Bool { installation.flatMap { Bundle(url: $0.app)?.object(forInfoDictionaryKey: "KokiriHUDPreferencesVersion") as? Int } == 1 }
     var stateTitle: String {
         if running, activeInstallation?.supportsLiveStatus != true { return "Game running" }
@@ -86,9 +110,11 @@ enum Destination: String, CaseIterable, Identifiable {
     var isStale: Bool { !running || timingUpdatedAt.map { Date().timeIntervalSince($0) > 5 } ?? true }
 
     func savePreferences() {
+        guard !humanPreviewRequested else { return }
         do { try preferences.save(to: preferenceFile) } catch { message = error.localizedDescription }
     }
     func refreshInstallation() {
+        if humanPreviewRequested { refreshShaders(); return }
         if let selected = preferences.installation {
             do { preferences.installation = try GameInstallation.inspect(selected.app) }
             catch { preferences.installation = nil; message = error.localizedDescription }
@@ -96,6 +122,7 @@ enum Destination: String, CaseIterable, Identifiable {
         refreshShaders()
     }
     func chooseInstallation() {
+        guard !humanPreviewRequested else { message = "This playtest uses the prepared Kokiri game."; return }
         let panel = NSOpenPanel(); panel.title = "Connect your game"; panel.prompt = "Connect Game"
         panel.allowedContentTypes = [.applicationBundle]; panel.canChooseDirectories = false
         panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")
@@ -106,6 +133,7 @@ enum Destination: String, CaseIterable, Identifiable {
         } catch { message = error.localizedDescription }
     }
     func chooseRepository() {
+        guard !humanPreviewRequested else { return }
         guard let url = chooseFolder(title: "Choose the Kokiri source folder", prompt: "Use Source") else { return }
         guard FileManager.default.isReadableFile(atPath: url.appendingPathComponent("engine/build.py").path) else {
             message = "Choose the Kokiri repository containing engine/build.py."; return
@@ -120,6 +148,7 @@ enum Destination: String, CaseIterable, Identifiable {
     }
     func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
     func importProfile() {
+        guard !humanPreviewRequested else { message = "Your copied player profile is already connected."; return }
         guard !busy, !building else { return }
         guard !anyGameRunning else { message = "Close Ocarina of Time before importing a save profile."; return }
         guard let source = chooseFolder(title: "Import a complete player profile", prompt: "Copy Profile", suggested: KokiriPaths.legacyProfile) else { return }
@@ -142,6 +171,7 @@ enum Destination: String, CaseIterable, Identifiable {
         if let runtime, !runtime.isTerminated { runtime.activate(options: [.activateAllWindows]); return }
         guard !busy, !building else { return }
         guard !anyGameRunning else { message = "Another game session is running. Finish it before starting Kokiri’s profile."; return }
+        if humanPreviewRequested { playHumanPreview(); return }
         guard let selected = installation else { selection = .setup; return }
         busy = true
         Task {
@@ -211,14 +241,50 @@ enum Destination: String, CaseIterable, Identifiable {
         }
     }
 
+    private func playHumanPreview() {
+        guard let binding = humanPreview else { message = humanPreviewError ?? "The human playtest binding is unavailable."; return }
+        guard let helper = Bundle.main.url(forResource: "human_preview", withExtension: "py") else {
+            message = "The verified human launch helper is missing from Kokiri."; return
+        }
+        busy = true
+        Task {
+            defer { busy = false }
+            do {
+                let verified = try GameInstallation.inspect(binding.appURL)
+                let pid = try await Task.detached(priority: .userInitiated) { try binding.launch(helper: helper) }.value
+                let deadline = Date().addingTimeInterval(8)
+                var application: NSRunningApplication?
+                var accepted: ProcessSample?
+                repeat {
+                    if let sample = ProcessSample.read(pid: pid), ProcessSample.executable(pid: pid) == verified.executable.path,
+                       binding.acknowledges(pid: pid, start: sample.start), let app = NSRunningApplication(processIdentifier: pid) {
+                        application = app; accepted = sample; break
+                    }
+                    try await Task.sleep(nanoseconds: 50_000_000)
+                } while Date() < deadline
+                guard let application, let accepted else {
+                    throw KokiriError.message("The game started, but monitoring could not verify its session. The game was left running.")
+                }
+                runtime = application; activeInstallation = verified; sessionFolder = binding.rootURL; sampleStart = accepted.start
+                recording = nil; snapshot = PerformanceSnapshot(); connected = false; timingUpdatedAt = nil
+                locationPending = nil; nextLocation = .distantPast; nextProcessWrite = .distantPast
+                tails = ["timing": LineTail(binding.rootURL.appendingPathComponent("timings.tsv")),
+                         "presented": LineTail(binding.rootURL.appendingPathComponent("timings.tsv.presented.tsv")),
+                         "status": LineTail(binding.rootURL.appendingPathComponent("status.jsonl"))]
+                catalogCheckpoint = nil; catalogContext = nil
+                application.activate(options: [.activateAllWindows]); message = nil
+            } catch { message = error.localizedDescription }
+        }
+    }
+
     private func tick() {
         guard let runtime else { return }
         if runtime.isTerminated {
             let endedInstallation = activeInstallation
             self.runtime = nil; activeInstallation = nil; connected = false
-            if let endedInstallation, let folder = sessionFolder {
+            if !humanPreviewRequested, let endedInstallation, let folder = sessionFolder {
                 catalog.completeOwnedSession(session: folder, runtime: endedInstallation.app, checkpoint: catalogCheckpoint, referenceContext: catalogContext)
-            } else {
+            } else if !humanPreviewRequested {
                 catalog.sessionFinished()
             }
             catalogCheckpoint = nil; catalogContext = nil
@@ -256,7 +322,8 @@ enum Destination: String, CaseIterable, Identifiable {
         if installation.supportsLiveStatus, Date() >= nextLocation {
             // Read-only position requests share one owner; never issue a second while one is pending.
             if locationPending == nil {
-                let id = "kokiri-" + UUID().uuidString.prefix(12)
+                let id = humanPreviewRequested ? "mcp-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(20)
+                    : "kokiri-" + UUID().uuidString.prefix(12)
                 if let handle = try? FileHandle(forWritingTo: folder.appendingPathComponent("input.txt")) {
                     defer { try? handle.close() }
                     do { try handle.seekToEnd(); try handle.write(contentsOf: Data("oot-live \(id) position\n".utf8)); locationPending = id }
@@ -281,16 +348,17 @@ enum Destination: String, CaseIterable, Identifiable {
         }
     }
     func setContribution(_ choice: Bool?) {
+        guard !humanPreviewRequested else { message = "This playtest keeps its records local."; return }
         Task { await catalog.choose(choice) }
     }
     func updateHUD(_ change: (inout HUDPreferences) -> Void) {
         guard supportsHUD, !anyGameRunning else { message = "Close the matching Kokiri game before changing its HUD."; return }
-        var value = HUDPreferences.read(from: KokiriPaths.game); change(&value)
-        do { try value.save(to: KokiriPaths.game); hud = value }
+        var value = HUDPreferences.read(from: hudFolder); change(&value)
+        do { try value.save(to: hudFolder); hud = value }
         catch { message = error.localizedDescription }
     }
     func refreshShaders() {
-        catalog.selectRuntime(installation?.app)
+        if !humanPreviewRequested { catalog.selectRuntime(installation?.app) }
         var counts: [String: Int] = [:]
         var seen = Set<String>()
         if let installation {
@@ -310,6 +378,7 @@ enum Destination: String, CaseIterable, Identifiable {
     }
 
     func startBuild(game: URL, fonts: URL, work: URL, output: URL) {
+        guard !humanPreviewRequested else { message = "The prepared game is already connected."; return }
         guard !busy, !building else { return }
         guard !anyGameRunning else { message = "Close the game before building."; return }
         guard let repository = preferences.repository else { message = "Choose the Kokiri source folder first."; return }
