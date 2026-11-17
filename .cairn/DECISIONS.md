@@ -1,5 +1,7 @@
 # Decisions
 
+- 2026-11-16: Published 29,796 signed v28 reference recipes in 233 packs at catalog.christianfurr.dev after actual host staging, backup/restore rehearsal and anonymous HTTPS verification. Ingestion stays disabled; compiled binaries, saves and logs remain private. The connected launcher preserves the existing human profile and can reconnect observation only to its exact acknowledged process.
+
 - 2026-11-16: The app shows compiled preparation counts from the bound full receipt separately from bundled and collected recipe counts. Signed public reference catalogs can be browsed/downloaded in a separate cache namespace; they never become exact runtime warm-up input. Private playtests allow public catalog reads while contribution writes and shared preferences remain disabled.
 
 - 2026-11-15: Integration alone accepts specialist commits and authorizes installation/releases; separate worktrees and an exclusive heavy-work grant protect the shared checkout and human gameplay. Acceptance requirements live in `docs/integration-acceptance.md`; current chat IDs and scheduling remain in a private ledger.

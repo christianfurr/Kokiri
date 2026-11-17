@@ -28,6 +28,8 @@ Import pinned public OoT source and reviewed fixes, with source-only copies of r
 
 ## Latest steering
 
+2026-11-16 update: full v28 preparation completed for the accepted private playtest, the user reports good gameplay, and the public signed reference catalog is live. See the connected-app PRD/review for the current app batch. Earlier status statements below describe their original snapshot.
+
 The user requested closure of our MacNativeGames PRs. All three open PRs (#2180, #2181, #2206) were closed on 2026-11-15; further development belongs in Kokiri. Initial standalone source commit `bb8c3e4` is public and all three CI jobs passed. Cloudflare CLI authentication is currently absent, so a deployed public catalog is not yet available.
 
 ## Verification

@@ -9,7 +9,7 @@
 
 Kokiri brings the **Nintendo Switch 2 edition of Ocarina of Time** to Apple silicon Macs, with a native launcher, custom in-game settings and a configurable performance HUD. It builds on the credited [MacNativeGames](https://github.com/ly05010419/MacNativeGames) native ARM64 and Metal runtime. You build the game locally from your own files.
 
-**Development preview.** There is no stable release yet. Major FPS drops, compilation stalls and high memory use remain unresolved. The latest v28 user playtest reported no rendering corruption; broader visual acceptance is still required. Full v28 shader preparation has not completed. The shared shader catalog is in development and has no live public service yet.
+**Development preview.** There is no stable release yet. Full v28 preparation completed for the current private playtest: 42,466 compiled Metal libraries and 28,786 pipelines, including 196 mesh pipelines. The user reports smooth gameplay with occasional new pipeline compilation; broader performance, memory and visual acceptance remain open. The [public metadata catalog](https://catalog.christianfurr.dev) now serves 29,796 signed reference recipes.
 
 [Website & HUD preview](https://christianfurr.github.io/Kokiri/) · [Build and try it](#try-kokiri) · [Report a problem](https://github.com/christianfurr/Kokiri/issues) · [Contribute](CONTRIBUTING.md) · [Catalog integration](docs/catalog/integration.md)
 
@@ -90,8 +90,9 @@ The builder verifies the supported input and rebuilds shader tooling from pinned
 | Custom menu and HUD | Checked in a copied-profile gameplay session; physical L3 + R3 verification remains open |
 | Whole-game performance | Unverified; severe FPS drops, compilation stalls and memory growth remain open |
 | v28 visual correctness | No corruption reported in the latest user playtest; broader area and visual checks remain open |
-| v28 shader preparation | Incomplete; source metadata totals do not count compiled shaders or pipelines |
-| Public catalog and automatic updates | Local implementation exists; production delivery remains pending |
+| v28 shader preparation | Complete for the current private build; preparation does not guarantee every gameplay specialization is covered |
+| Public metadata catalog | Live signed reference dataset; native downloads remain separate from game caches |
+| Automatic updates | Plumbing tested; production signing and distribution remain pending |
 
 New results need a matching build, hardware, resolution, tested route and cache state. We report actual game presentation rates separately from frame generation. We do not claim whole-game 60 FPS or a performance advantage over another project.
 

@@ -19,6 +19,6 @@ New independent repository. Source integration and product verification are in p
 - `assets/brand/`: original Kokiri logo and generation provenance.
 - `website/`: buildless GitHub Pages site with an interactive, sample-data HUD preview; asset provenance and local preview instructions live alongside it. `.github/workflows/pages.yml` publishes only this folder.
 - `release/`: signed shell archive/appcast/delta preparation; 20 checks include actual delta reconstruction and tamper rejection. Production signing/hosting remains unavailable.
-- `docs/`: build, adapter, privacy and measured-performance documentation. Catalog hosting and native warm-plan adoption remain acceptance work.
+- `docs/`: build, adapter, privacy and measured-performance documentation. Public reference hosting is live; native warm-plan gameplay adoption remains acceptance work.
 
 The independent public repository is https://github.com/christianfurr/Kokiri. Initial source commit `bb8c3e4` is published on `feat/kokiri-foundation`; all three CI jobs passed on 2026-11-15. Game-derived code, shader binaries and user data belong outside this source repository. Root owns integration, runtime HUD and exclusive gameplay/GPU testing. Catalog runtime integration continues in a follow-up change.
