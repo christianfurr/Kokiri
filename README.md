@@ -25,7 +25,7 @@ Actual native app window, captured 2026-11-15 with an existing compatible game b
 - **A configurable performance HUD.** Choose four corners, four sizes and three detail modes. Position, size and detail have been checked in gameplay and persist between launches.
 - **Local session statistics.** Inspect physical memory use, sampled area and optional frame timing. Recordings show their date and build, and observed game rates exclude generated frames.
 
-Kokiri also develops an **open shader and pipeline catalog** that compatible projects can integrate. The public protocol endpoint responds; a published dataset and verified native adoption remain pending. The launcher's signed-update plumbing uses Sparkle, alongside a separate runtime-source update path that rebuilds from your own assets. Production feeds, distribution signing and actual game update/relaunch/rollback acceptance remain pending.
+Kokiri also develops an **open shader and pipeline catalog** that compatible projects can integrate. The public service serves 29,796 signed reference recipes, and the native app verifies downloads into its separate metadata cache. Exact runtime warm-up adoption remains a separate acceptance gate. The launcher's signed-update plumbing uses Sparkle, alongside a separate runtime-source update path that rebuilds from your own assets. Production feeds, distribution signing and actual game update/relaunch/rollback acceptance remain pending.
 
 ## Try Kokiri
 
