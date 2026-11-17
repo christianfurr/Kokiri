@@ -57,6 +57,9 @@ if feed:
     if len(base64.b64decode(key,validate=True))!=32:raise SystemExit('Expected a 32-byte Ed25519 public key')
     info.update(SUFeedURL=feed,SUPublicEDKey=key)
 origin=os.environ.get('KOKIRI_CATALOG_ORIGIN');encoded=os.environ.get('KOKIRI_CATALOG_KEYS_JSON')
+if origin is None and encoded is None:
+    origin='https://catalog.christianfurr.dev'
+    encoded=json.dumps({'kokiri-catalog-2026-11-15-a':'ktuxMahqMQ1aQGZNmczKYmPxp3VXUpjGcdxwKW36uDA='})
 if bool(origin)!=bool(encoded):raise SystemExit('Supply both catalog origin and public keys, or neither')
 if origin:
     parsed=urlsplit(origin);keys=json.loads(encoded)

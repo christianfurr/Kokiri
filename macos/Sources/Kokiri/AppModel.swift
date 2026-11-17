@@ -31,6 +31,9 @@ enum Destination: String, CaseIterable, Identifiable {
     @Published var connected = false
     @Published var timingUpdatedAt: Date?
     @Published var shaderCounts: [String: Int] = [:]
+    @Published var collectedShaderCounts: [String: Int] = [:]
+    @Published var preparation: RuntimePreparation?
+    @Published var shaderRefreshPending = false
     @Published var buildOutput = ""
     @Published var buildStage = "Not started"
     @Published var building = false
@@ -72,11 +75,18 @@ enum Destination: String, CaseIterable, Identifiable {
             preferences = LauncherPreferences.load(from: preferenceFile)
         }
         if let binding {
-            catalog = CatalogFacade(store: binding.rootURL.appendingPathComponent("Catalog"), endpoint: nil, trustedKeys: [:])
+            catalog = CatalogFacade(store: binding.rootURL.appendingPathComponent("Catalog"), allowsContributions: false)
         } else { catalog = CatalogFacade() }
         hud = HUDPreferences.read(from: binding?.settingsURL ?? KokiriPaths.game)
         catalogObservation = catalog.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         refreshInstallation()
+        if let binding {
+            sessionFolder = binding.rootURL
+            Task {
+                let previous = await Task.detached(priority: .utility) { RecordedSession.recentSnapshot(binding.rootURL) }.value
+                if !running { snapshot = previous }
+            }
+        }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -90,6 +100,11 @@ enum Destination: String, CaseIterable, Identifiable {
         }
     }
 
+    var isPlaytest: Bool { humanPreviewRequested }
+    var profileFolder: URL { humanPreview?.rootURL.appendingPathComponent("profile") ?? KokiriPaths.profile }
+    var gameDataFolder: URL { humanPreview?.rootURL ?? KokiriPaths.game }
+    var canImportProfile: Bool { !humanPreviewRequested && !busy && !anyGameRunning }
+    var collectedRecipeCount: Int { collectedShaderCounts.values.reduce(0, +) }
     var running: Bool { runtime?.isTerminated == false }
     var anyGameRunning: Bool {
         ["com.christianfurr.kokiri.runtime", "org.macnativegames.oot"].contains {
@@ -288,6 +303,7 @@ enum Destination: String, CaseIterable, Identifiable {
                 catalog.sessionFinished()
             }
             catalogCheckpoint = nil; catalogContext = nil
+            refreshShaders()
             return
         }
         guard let start = sampleStart, let folder = sessionFolder else { return }
@@ -358,24 +374,25 @@ enum Destination: String, CaseIterable, Identifiable {
         catch { message = error.localizedDescription }
     }
     func refreshShaders() {
-        if !humanPreviewRequested { catalog.selectRuntime(installation?.app) }
-        var counts: [String: Int] = [:]
-        var seen = Set<String>()
-        if let installation {
-            let folder = installation.app.appendingPathComponent("Contents/Resources/totk/build")
-            for name in ["pso_manifest.tsv", "pso_title.tsv"] {
-                let url = folder.appendingPathComponent(name)
-                guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 16 << 20,
-                      let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-                for line in text.split(separator: "\n") where !line.hasPrefix("#") {
-                    guard let kind = line.split(separator: "\t").first, ["S","C","R","T","M","V","A"].contains(String(kind)),
-                          seen.insert(String(line)).inserted else { continue }
-                    counts[String(kind), default: 0] += 1
-                }
-            }
+        catalog.selectRuntime(installation?.app)
+        guard !shaderRefreshPending else { return }
+        let app = installation?.app
+        let cache = humanPreview?.rootURL.appendingPathComponent("cache") ?? KokiriPaths.game.appendingPathComponent("shader-cache")
+        shaderRefreshPending = true
+        Task {
+            let result = await Task.detached(priority: .utility) {
+                let folder = app?.appendingPathComponent("Contents/Resources/totk/build")
+                let bundled = ShaderMetadata.counts(files: folder.map { [$0.appendingPathComponent("pso_manifest.tsv"), $0.appendingPathComponent("pso_title.tsv")] } ?? [])
+                let collected = ShaderMetadata.counts(files: [cache.appendingPathComponent("pso_collected.tsv")])
+                return (bundled, collected, app.flatMap { try? RuntimePreparation.load(app: $0) })
+            }.value
+            shaderRefreshPending = false
+            guard installation?.app == app else { refreshShaders(); return }
+            shaderCounts = result.0; collectedShaderCounts = result.1; preparation = result.2
         }
-        shaderCounts = counts
     }
+
+    func refreshLibrary() { refreshShaders(); catalog.retryDownload() }
 
     func startBuild(game: URL, fonts: URL, work: URL, output: URL) {
         guard !humanPreviewRequested else { message = "The prepared game is already connected."; return }

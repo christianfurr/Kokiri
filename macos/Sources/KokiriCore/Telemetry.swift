@@ -109,6 +109,32 @@ public final class LineTail {
 }
 
 public struct RecordedSession: Sendable {
+    /// Restore recent observations without replaying a long session on the UI thread.
+    public static func recentSnapshot(_ folder: URL) -> PerformanceSnapshot {
+        var snapshot = PerformanceSnapshot()
+        for name in ["timings.tsv", "timings.tsv.presented.tsv", "status.jsonl", "process.jsonl"] {
+            let url = folder.appendingPathComponent(name)
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
+                  values.isRegularFile == true, values.isSymbolicLink != true,
+                  let handle = try? FileHandle(forReadingFrom: url) else { continue }
+            defer { try? handle.close() }
+            let size = UInt64(max(0, values.fileSize ?? 0)), start = size > 256 << 10 ? size - UInt64(256 << 10) : 0
+            do {
+                try handle.seek(toOffset: start)
+                guard let data = try handle.read(upToCount: 256 << 10) else { continue }
+                let rows = String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
+                for row in rows.dropFirst(start > 0 ? 1 : 0).dropLast() {
+                    switch name {
+                    case "timings.tsv": snapshot.consumeTiming(String(row))
+                    case "timings.tsv.presented.tsv": snapshot.consumePresented(String(row))
+                    case "status.jsonl": snapshot.consumeStatus(String(row))
+                    default: snapshot.consumeProcess(String(row))
+                    }
+                }
+            } catch { continue }
+        }
+        return snapshot
+    }
     public let folder: URL
     public let date: Date
     public let build: String?

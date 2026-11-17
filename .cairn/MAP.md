@@ -14,7 +14,7 @@ New independent repository. Source integration and product verification are in p
 - `LICENSE`: MIT terms preserving upstream copyright.
 - `engine/`: pinned public native runtime, reviewed ownership/mesh/NS2 transfer fixes, standalone build entry. External source-built shader tools use serviced NativeAOT 10.0.14; copied-profile gameplay verification is in progress.
 - `engine/docs/kokiri-startup.md`: original logo startup presentation, real phase/readiness rules and offscreen native view validation.
-- `macos/`: SwiftUI product UI, local profile import/launch, measured session reader and Sparkle updater. Real Home/Performance captures are in `assets/readme/`; current source has passed the existing 12 core tests.
+- `macos/`: SwiftUI Home, profile-aware Play/Settings, local preparation and public Shader Library, measured session reader and Sparkle updater. `KokiriCore/ShaderLibrary.swift` reads bound preparation receipts and full metadata lists; reference downloads remain separate from exact runtime warm-up.
 - `services/catalog/`: open exact-context metadata protocol, Worker/D1 service, quarantine/signing, queue SDK and local tests.
 - `assets/brand/`: original Kokiri logo and generation provenance.
 - `website/`: buildless GitHub Pages site with an interactive, sample-data HUD preview; asset provenance and local preview instructions live alongside it. `.github/workflows/pages.yml` publishes only this folder.

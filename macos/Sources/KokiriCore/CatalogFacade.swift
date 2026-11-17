@@ -16,12 +16,19 @@ import Foundation
     @Published public private(set) var downloadStatus = "Catalog downloads are not configured in this build."
     @Published public private(set) var verifiedIndex: URL?
     @Published public private(set) var downloadPending = false
+    @Published public private(set) var referenceIndex: URL?
+    public private(set) var allowsContributions = true
+    public private(set) var origin: URL?
+    public var protocolURL: URL? { origin?.appendingPathComponent("v1/protocol") }
     private var selectedRuntime: URL?
     private var runtimeGeneration: UInt64 = 0
     private var verificationKeys: [String: Data] = [:]
     private var identityFile: URL { KokiriPaths.game.appendingPathComponent("Catalog/runtime-identity.json") }
 
     public convenience init() {
+        self.init(store: KokiriPaths.support.appendingPathComponent("Catalog"), allowsContributions: true)
+    }
+    public convenience init(store: URL, allowsContributions: Bool) {
         let endpoint = (Bundle.main.object(forInfoDictionaryKey: "KokiriCatalogOrigin") as? String).flatMap(URL.init(string:))
         let encodedKeys = Bundle.main.object(forInfoDictionaryKey: "KokiriCatalogPublicKeys") as? [String: String] ?? [:]
         var keys: [String: Data] = [:]
@@ -31,10 +38,12 @@ import Foundation
             }
             keys[id] = data
         }
-        self.init(store: KokiriPaths.support.appendingPathComponent("Catalog"), endpoint: endpoint, trustedKeys: keys)
+        self.init(store: store, endpoint: endpoint, trustedKeys: keys, allowsContributions: allowsContributions)
     }
     private init(configurationError: String) { status = configurationError }
-    public init(store: URL, endpoint: URL?, trustedKeys: [String: Data]) {
+    public init(store: URL, endpoint: URL?, trustedKeys: [String: Data], allowsContributions: Bool = true) {
+        self.allowsContributions = allowsContributions
+        origin = endpoint
         verificationKeys = trustedKeys
         do { client = try CatalogClient(store: store, endpoint: endpoint, trustedKeys: trustedKeys) }
         catch { status = error.localizedDescription; return }
@@ -50,7 +59,7 @@ import Foundation
         refreshSelectedRuntime()
     }
     public func choose(_ choice: Bool?) async {
-        guard ready, !choicePending, let client else { return }
+        guard allowsContributions, ready, !choicePending, let client else { return }
         choicePending = true
         // An opt-out stops shell-side processing while its durable write completes.
         if choice != true { consent = choice }
@@ -66,7 +75,7 @@ import Foundation
     }
     /// Only the reviewed runtime metadata adapter may call this; no raw file is queued by the UI.
     public func enqueueValidatedEnvelope(_ data: Data) {
-        guard let client, consent == true else { return }
+        guard allowsContributions, let client, consent == true else { return }
         Task {
             do { try await client.enqueueValidatedEnvelope(data); await updateStatus(); await flush() }
             catch { status = error.localizedDescription }
@@ -74,7 +83,7 @@ import Foundation
     }
     public func deferSharing(_ reason: String) { status = reason }
     public func ingestOwnedSession(file: URL, checkpoint: RuntimeMetadataCheckpoint, context: Data, session: URL) {
-        guard consent == true else { return }
+        guard allowsContributions, consent == true else { return }
         do { ingestCapturedRows(try RuntimeMetadataDelta.appended(file, since: checkpoint), context: context, session: session) }
         catch { status = "Catalog sharing deferred: " + error.localizedDescription }
     }
@@ -82,7 +91,7 @@ import Foundation
         guard consent == true, let client else { return }
         Task {
             do {
-                guard consent == true else { return }
+                guard allowsContributions, consent == true else { return }
                 if !delta.completeRows.isEmpty {
                     let file = session.appendingPathComponent("catalog-delta.tsv")
                     try delta.completeRows.write(to: file, options: .atomic)
@@ -157,12 +166,16 @@ import Foundation
     }
     public func selectRuntime(_ app: URL?) {
         guard selectedRuntime != app else { return }
-        selectedRuntime = app; runtimeGeneration &+= 1; verifiedIndex = nil
+        selectedRuntime = app; runtimeGeneration &+= 1; verifiedIndex = nil; referenceIndex = nil; reviewedRecords = nil; referenceIndex = nil
         refreshSelectedRuntime()
     }
     private func refreshSelectedRuntime() {
         guard configured, ready else { return }
         guard let app = selectedRuntime else { downloadStatus = "Connect a runtime to check catalog compatibility."; return }
+        if let preparation = try? RuntimePreparation.load(app: app) {
+            refreshReference(context: preparation.referenceContext)
+            return
+        }
         if Bundle(url: app)?.object(forInfoDictionaryKey: "KokiriCatalogWarmVersion") as? Int == 1 {
             let generation = runtimeGeneration, file = identityFile, cache = KokiriPaths.game.appendingPathComponent("shader-cache")
             Task {
@@ -218,8 +231,34 @@ import Foundation
             } catch { if generation == runtimeGeneration { downloadStatus = "Catalog download deferred: " + error.localizedDescription } }
         }
     }
+    public func retryDownload() { refreshSelectedRuntime() }
+    private func refreshReference(context: Data) {
+        guard let client, configured, !downloadPending else { return }
+        let generation = runtimeGeneration
+        downloadPending = true
+        downloadStatus = "Checking the public library…"
+        Task {
+            defer {
+                downloadPending = false
+                if generation != runtimeGeneration { refreshSelectedRuntime() }
+            }
+            do {
+                let index = try await client.refreshReference(context: context)
+                guard generation == runtimeGeneration else { return }
+                referenceIndex = index
+                verifiedIndex = nil
+                downloadStatus = "Shared recipes downloaded and verified. Your game uses its prepared local shader pack; these reference recipes stay separate."
+                await updateStatus()
+            } catch {
+                guard generation == runtimeGeneration else { return }
+                downloadStatus = error.localizedDescription.contains("404")
+                    ? "No shared recipes have been published for this game yet. Local preparation is ready to use."
+                    : "The public library is unavailable right now. Local preparation is ready to use. " + error.localizedDescription
+            }
+        }
+    }
     private func flush() async {
-        guard let client, consent == true, configured else { return }
+        guard allowsContributions, let client, consent == true, configured else { return }
         do { try await client.flushAutomatic(); await updateStatus() }
         catch { await updateStatus() }
     }
@@ -228,7 +267,7 @@ import Foundation
         let value = await client.status()
         consent = value.consent
         configured = value.configured; queued = value.queued; reviewedRecords = value.reviewedRecords
-        status = value.lastError ?? (configured ? consent == true ? "Automatic metadata sharing is enabled. New records are reviewed before publication." : "The catalog is available. Sharing stays off until you choose it."
+        status = value.lastError ?? (!allowsContributions ? "Your playtest discoveries stay on this Mac. Public library downloads are available." : configured ? consent == true ? "Automatic metadata sharing is enabled. New records are reviewed before publication." : "The catalog is available. Sharing stays off until you choose it."
                                   : "The shared catalog is not configured in this build. Nothing is uploaded.")
     }
 }
