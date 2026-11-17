@@ -172,7 +172,7 @@ import Foundation
     }
     public func selectRuntime(_ app: URL?) {
         guard selectedRuntime != app else { return }
-        selectedRuntime = app; runtimeGeneration &+= 1; verifiedIndex = nil; referenceIndex = nil; reviewedRecords = nil; referenceIndex = nil
+        selectedRuntime = app; runtimeGeneration &+= 1; verifiedIndex = nil; referenceIndex = nil; reviewedRecords = nil
         refreshSelectedRuntime()
     }
     private func refreshSelectedRuntime() {
@@ -221,45 +221,60 @@ import Foundation
             downloadStatus = "This runtime is reference-only: compiler, target or other compatibility fingerprints are unknown. No warm list is downloaded."
             return
         }
-        let generation = runtimeGeneration
-        downloadPending = true; downloadStatus = "Checking the signed catalog for this exact runtime…"
-        Task {
-            defer {
-                downloadPending = false
-                if generation != runtimeGeneration { refreshSelectedRuntime() }
-            }
-            do {
-                let index = try await client.refresh(context: context)
-                guard generation == runtimeGeneration else { return }
-                verifiedIndex = index
-                downloadStatus = "Signed metadata verified. Ordinary render/compute candidates are prepared on the next Play. Mesh pipeline hitches still need separate preparation."
-                await updateStatus()
-            } catch { if generation == runtimeGeneration { downloadStatus = "Catalog download deferred: " + error.localizedDescription } }
-        }
+        refresh(context: context, client: client, referenceOnly: false)
     }
     public func retryDownload() { refreshSelectedRuntime() }
     private func refreshReference(context: Data) {
         guard let client, configured, !downloadPending else { return }
+        refresh(context: context, client: client, referenceOnly: true)
+    }
+    private func refresh(context: Data, client: CatalogClient, referenceOnly: Bool) {
         let generation = runtimeGeneration
         downloadPending = true
-        downloadStatus = "Checking the public library…"
+        downloadStatus = "Checking downloaded recipes…"
         Task {
             defer {
                 downloadPending = false
                 if generation != runtimeGeneration { refreshSelectedRuntime() }
             }
             do {
-                let index = try await client.refreshReference(context: context)
+                let cached = try await client.cachedIndex(context: context, referenceOnly: referenceOnly)
                 guard generation == runtimeGeneration else { return }
-                referenceIndex = index
-                verifiedIndex = nil
-                downloadStatus = "Shared recipes downloaded and verified. Your game uses its prepared local shader pack; these reference recipes stay separate."
-                await updateStatus()
+                if referenceOnly { referenceIndex = cached; verifiedIndex = nil }
+                else { verifiedIndex = cached; referenceIndex = nil }
+                downloadStatus = cached == nil ? "Checking the public library…" : "Downloaded recipes verified. Checking for updates…"
             } catch {
                 guard generation == runtimeGeneration else { return }
-                downloadStatus = error.localizedDescription.contains("404")
-                    ? "No shared recipes have been published for this game yet. Local preparation is ready to use."
-                    : "The public library is unavailable right now. Local preparation is ready to use. " + error.localizedDescription
+                if referenceOnly { referenceIndex = nil } else { verifiedIndex = nil }
+                downloadStatus = "Downloaded recipes could not be verified. Checking the public library…"
+            }
+            do {
+                let index = try await (referenceOnly ? client.refreshReference(context: context) : client.refresh(context: context))
+                guard generation == runtimeGeneration else { return }
+                if referenceOnly {
+                    referenceIndex = index; verifiedIndex = nil
+                    downloadStatus = "Shared recipes downloaded and verified. Your game uses its prepared local shader pack; these reference recipes stay separate."
+                } else {
+                    verifiedIndex = index; referenceIndex = nil
+                    downloadStatus = "Signed metadata verified. Ordinary render/compute candidates are prepared on the next Play. Mesh pipeline hitches still need separate preparation."
+                }
+                await updateStatus()
+            } catch {
+                let failure = error.localizedDescription
+                // A failed publication may have advanced the accepted revision.
+                // Recheck before retaining an older index after that failure.
+                let cached = try? await client.cachedIndex(context: context, referenceOnly: referenceOnly)
+                guard generation == runtimeGeneration else { return }
+                if referenceOnly { referenceIndex = cached } else { verifiedIndex = cached }
+                if cached != nil {
+                    downloadStatus = referenceOnly
+                        ? "Using verified downloaded recipes. Library updates are unavailable; local preparation remains ready."
+                        : "Using verified downloaded recipes for the next Play. Library updates are unavailable."
+                } else {
+                    downloadStatus = failure.contains("404")
+                        ? "No shared recipes have been published for this game yet. Local preparation is ready to use."
+                        : "The public library is unavailable right now. Local preparation is ready to use. " + failure
+                }
             }
         }
     }
