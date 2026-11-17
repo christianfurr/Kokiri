@@ -1,7 +1,8 @@
 ---
 id: CN-004
 title: Reject invalid ingress before reading upload bodies
-status: in_progress
+status: closed
+closed: 2026-11-17
 type: feature
 priority: 1
 feature: 2026-11-17-catalog-play-ready

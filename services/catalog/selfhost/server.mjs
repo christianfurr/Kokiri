@@ -37,6 +37,12 @@ export function createCatalogServer({ database, ingest = false, limits = HOST_LI
     if (!req.url?.startsWith('/') || req.url.startsWith('//') || req.url.length > 256 || !['GET', 'POST'].includes(req.method)) {
       metrics.rejected++; reply(res, 400, 'invalid_request'); return;
     }
+    // Admit raw paths before buffering: URL normalization must not turn an
+    // unmatched tunnel path into a contribution write at the origin.
+    const path = req.url.split('?', 1)[0];
+    const allowed = req.method === 'POST' ? path === '/v1/contributions'
+      : path === '/' || path === '/v1/protocol' || /^\/v1\/catalogs\/[a-f0-9]{64}\/manifest$/.test(path) || /^\/v1\/packs\/[a-f0-9]{64}$/.test(path);
+    if (!allowed) { metrics.rejected++; reply(res, 404, 'not_found'); return; }
     if (req.method === 'POST' && (!ingest || !allowPost())) {
       metrics.rejected++; reply(res, ingest ? 429 : 503, ingest ? 'rate_limited' : 'ingestion_disabled', { 'Retry-After': '60' }); return;
     }
