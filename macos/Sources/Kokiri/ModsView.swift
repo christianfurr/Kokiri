@@ -31,30 +31,11 @@ struct ModsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            toolbar
-            if let message = model.message { feedback(message) }
-            if model.selectedPacks.isEmpty {
-                emptyLibrary
-            } else {
-                libraryTools
-                HSplitView {
-                    modList
-                        .frame(minWidth: 340, idealWidth: 400, maxWidth: .infinity)
-                    inspector
-                        .frame(minWidth: 280, idealWidth: 320, maxWidth: 400, maxHeight: .infinity, alignment: .topLeading)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.background)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line.opacity(0.75)).allowsHitTesting(false)
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 20)
-            }
-            footer
+        GeometryReader { geometry in
+            content
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
         .tint(Palette.forest)
         .task {
             model.refresh()
@@ -68,6 +49,38 @@ struct ModsView: View {
         } message: {
             Text("The mod files and your game save stay in place.")
         }
+    }
+
+    private var content: some View {
+        VStack(spacing: 0) {
+            toolbar.fixedSize(horizontal: false, vertical: true).layoutPriority(1)
+            if let message = model.message {
+                feedback(message).fixedSize(horizontal: false, vertical: true).layoutPriority(1)
+            }
+            if model.selectedPacks.isEmpty {
+                emptyLibrary
+            } else {
+                libraryTools.fixedSize(horizontal: false, vertical: true).layoutPriority(1)
+                HSplitView {
+                    modList
+                        .frame(minWidth: 340, idealWidth: 400, maxWidth: .infinity,
+                               minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+                    inspector
+                        .frame(minWidth: 280, idealWidth: 320, maxWidth: 400,
+                               minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+                }
+                .frame(minHeight: 0, maxHeight: .infinity)
+                .background(.background)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line.opacity(0.75)).allowsHitTesting(false)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 20)
+            }
+            footer.fixedSize(horizontal: false, vertical: true).layoutPriority(1)
+        }
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var toolbar: some View {
@@ -172,9 +185,11 @@ struct ModsView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
+                .frame(minHeight: 0, maxHeight: .infinity)
                 .accessibilityLabel("Mods in load order")
             }
         }
+        .frame(minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func modRow(_ pack: ModPack) -> some View {

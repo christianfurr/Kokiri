@@ -84,7 +84,10 @@ enum Destination: String, CaseIterable, Identifiable {
         }
         if let binding {
             catalog = CatalogFacade(store: binding.rootURL.appendingPathComponent("Catalog"), allowsContributions: false)
-        } else { catalog = CatalogFacade() }
+        } else {
+            catalog = CatalogFacade(store: KokiriPaths.support.appendingPathComponent("Catalog"),
+                                    allowsContributions: !humanPreviewRequested)
+        }
         hud = binding.map { HUDPreferences.read(from: $0.settingsURL) }
             ?? (humanPreviewRequested ? HUDPreferences() : HUDPreferences.read(from: KokiriPaths.game))
         lastProfileFolder = ProfileLocation.resolve(previewRequested: humanPreviewRequested, binding: binding)
