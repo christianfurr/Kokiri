@@ -1,5 +1,7 @@
 # Decisions
 
+- 2026-11-17: The user requested actual private-runtime mod launching. A separate `KokiriHumanPreviewModsVersion=1` handoff admits only a pinned per-launch snapshot under the verified human root. Empty profiles retain unmodded launch. Cached native requests, compiler/library hashes and full pipeline archives must be freshly checked for the new executable before a new receipt; Integration alone accepts/builds/installs the candidate.
+
 - 2026-11-16: User selected Compact split for Mods/Saves, then requested MacNative Mods as the Mods interface reference. Use a compact table and inspector for mods, slot list and preview for saves, with secondary details collapsed. Invalid requested private bindings fail closed instead of falling back to ordinary player data.
 
 - 2026-11-16: Mods and Saves are separate native app destinations. Kokiri copies compatible MacNative Mods packs into its own library and keeps mod loadout profiles separate from player save profiles. Saves is a read-only view of the exact connected profile. The accepted private runtime currently disables mods, so this app feature exposes that limitation; any private runtime capability upgrade is separate work.

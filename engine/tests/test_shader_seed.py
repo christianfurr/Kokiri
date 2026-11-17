@@ -340,6 +340,40 @@ class SeedTests(unittest.TestCase):
         self.assertEqual(total['translated_default'], 2)
         self.assertEqual(total['checked_variants'], 2)
 
+    def test_cached_only_batches_require_every_native_request_to_be_kept(self):
+        key = 'a' * 64
+        verified = {key + '-' + 'c' * 12}
+        text = self.completion(1).replace('0 cached ones kept', '1 cached ones kept')
+        report = seed.batch_completion(text, [key], verified, require_cached=True)
+        self.assertEqual(report['made_again'], 0)
+        text = text.replace('1 cached ones kept, 0 made again', '0 cached ones kept, 1 made again')
+        with self.assertRaisesRegex(ValueError, 'cached-only'):
+            seed.batch_completion(text, [key], verified, require_cached=True)
+        with self.assertRaisesRegex(ValueError, 'verified set'):
+            seed.batch_completion(self.completion(1), [key], set(), require_cached=True)
+
+    def test_cached_only_requires_complete_prior_inventory_and_exact_context(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out=Path(folder);translator=out/'translator';translator.write_bytes(b'pinned translator')
+            record=dict(chain=seed.CHAIN,translation_context_sha256='a'*64,translator_sha256=seed.sha256(translator),
+                        all_default=True,only=None,corpus_shaders=1,translated_default=1,listed_asked=0,listed_variants=0,
+                        files={'a_b.metal':'b'*64,**{name:'c'*64 for name in seed.GENERATED}})
+            manifest=out/'seed-manifest.json';manifest.write_text(json.dumps(record))
+            self.assertEqual(seed.cached_seed_outputs(out,'a'*64,translator),{'a_b.metal':'b'*64})
+            for changed in (dict(files={}),dict(files={'../escape':'b'*64}),dict(all_default=False),
+                            dict(translated_default=0),dict(translation_context_sha256='c'*64)):
+                manifest.write_text(json.dumps({**record,**changed}))
+                with self.assertRaisesRegex(ValueError,'complete compatible'):
+                    seed.cached_seed_outputs(out,'a'*64,translator)
+
+    def test_cached_only_rejects_old_evidence_resume_before_reading_inputs(self):
+        with mock.patch.object(sys,'argv',['prepare_ns2_seed.py','--version','oot','--depth-mode','minus-w',
+                                           '--binary','/missing-runtime','--require-cached','--resume-plan','/old-plan',
+                                           '--publish-verified-only']):
+            with self.assertRaises(SystemExit) as done:
+                seed.main()
+            self.assertEqual(done.exception.code,2)
+
     def test_omitted_nondefault_binding_requests_cannot_pass_zero_of_zero(self):
         key = 'a'*64
         verified = {key+'-'+'b'*12}

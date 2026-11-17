@@ -186,7 +186,8 @@ enum Destination: String, CaseIterable, Identifiable {
         modsContextGameRunning = anyGameRunning
         mods.setContext(installation: installation,
                         gameRunning: modsContextGameRunning,
-                        launchSupported: !humanPreviewRequested)
+                        launchSupported: !humanPreviewRequested || profileFolder != nil,
+                        mode: humanPreviewRequested ? .humanPreview : .ordinary)
     }
     private func persistSetupDraft() {
         guard !loadingSetupDraft, !humanPreviewRequested else { return }
@@ -383,13 +384,14 @@ enum Destination: String, CaseIterable, Identifiable {
             defer { busy = false }
             do {
                 let verified = try GameInstallation.inspect(binding.appURL)
-                let pid = try await Task.detached(priority: .userInitiated) { try binding.launch(helper: helper) }.value
+                let modLaunch = try await mods.prepareHumanLaunch(binding: binding)
+                let pid = try await Task.detached(priority: .userInitiated) { try binding.launch(helper: helper, mods: modLaunch) }.value
                 let deadline = Date().addingTimeInterval(8)
                 var application: NSRunningApplication?
                 var accepted: ProcessSample?
                 repeat {
                     if let sample = ProcessSample.read(pid: pid), ProcessSample.executable(pid: pid) == verified.executable.path,
-                       binding.acknowledges(pid: pid, start: sample.start), let app = NSRunningApplication(processIdentifier: pid) {
+                       binding.acknowledges(pid: pid, start: sample.start, expectedMods: modLaunch, requireUnmodded: modLaunch == nil), let app = NSRunningApplication(processIdentifier: pid) {
                         application = app; accepted = sample; break
                     }
                     try await Task.sleep(nanoseconds: 50_000_000)

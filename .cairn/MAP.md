@@ -11,6 +11,7 @@ Independent Mac project. [STATUS.md](../STATUS.md) is the dated public acceptanc
 - `docs/integration-acceptance.md`: specialist boundaries, preservation, full-v28 evidence, matched gameplay gates and integration/release requirements; these are requirements, not completed acceptance.
 - `.cairn/features/2026-11-15-agent-workbench/PRD.md` and `docs/development-workbench.md`: disposable agent sessions, credited transactional save editing and typed development controls; actual packaged-runtime isolation and host adoption remain acceptance gates.
 - `.cairn/features/2026-11-16-mods-saves/`: dedicated Mods profiles/imports and read-only Saves viewer; ordinary overlay launch requires an explicit compatible runtime. Existing private preview remains library-only for mods.
+- `.cairn/features/2026-11-17-human-mod-launch/`: separate source candidate for capability-versioned human mod snapshots and bounded full-v28 reuse verification; native/game acceptance and installation remain separate gates.
 - `docs/human-preview.md`: private human-owned runtime entry and clean external spawn; compiled source and real packaged isolation are separate acceptance gates. The renderer stays `Contents/MacOS/KokiriGame`.
 - `LICENSE`: MIT terms preserving upstream copyright.
 - `engine/`: pinned public native runtime, reviewed ownership/mesh/NS2 transfer fixes, standalone build entry. External source-built shader tools use serviced NativeAOT 10.0.14; copied-profile gameplay verification is in progress.

@@ -86,6 +86,53 @@ final class HumanPreviewTests: XCTestCase {
         XCTAssertNil(plan.environment["TOTK_PROFILE_DIR"])
     }
 
+    func testEmptyHumanModProfileCreatesNoSnapshotAndKeepsOldLaunchArguments() throws {
+        let value = try fixture(), binding = try HumanPreviewBinding.load(value.file)
+        let library = ModLibrary(root: value.base.appendingPathComponent("Library"))
+        XCTAssertNil(try binding.prepareModLaunch(library: library))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: value.root.appendingPathComponent("mods").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: value.root.appendingPathComponent("profile").path))
+    }
+
+    func testHumanModSnapshotIsBoundToGameAndProfileWithoutWritingTheirInputs() throws {
+        let value = try fixture(), binding = try HumanPreviewBinding.load(value.file), fm = FileManager.default
+        let app = binding.appURL, resources = app.appendingPathComponent("Contents/Resources/totk")
+        let romfs = resources.appendingPathComponent("extracted/oot/romfs")
+        try fm.createDirectory(at: romfs, withIntermediateDirectories: true)
+        let info: [String: Any] = ["KokiriHumanPreviewVersion": 1, "KokiriHumanPreviewModsVersion": 1]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: app.appendingPathComponent("Contents/Info.plist"))
+        let original = Data("original".utf8), name = Data("Model/Link.bin\0".utf8)
+        var index = Data("TOTKRFS1".utf8)
+        func append(_ word: UInt64, bytes: Int) { for offset in 0..<bytes { index.append(UInt8(truncatingIfNeeded: word >> (offset * 8))) } }
+        append(1, bytes: 8); append(48, bytes: 8); append(0, bytes: 8); append(UInt64(original.count), bytes: 8)
+        append(0, bytes: 4); append(UInt64(name.count), bytes: 4); index.append(name)
+        try index.write(to: romfs.appendingPathComponent("runtime-index.bin"))
+        try original.write(to: romfs.appendingPathComponent("romfs.bin"))
+        let config = resources.appendingPathComponent("build/game-data/oot/romfs-config.txt")
+        try fm.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("ROMFS_IMAGE_SIZE \(original.count)\nROMFS_IMAGE_SHA256 \(HumanModLaunch.digest(original))\nROMFS_INDEX_SHA256 \(HumanModLaunch.digest(index))\n".utf8).write(to: config)
+        let source = value.base.appendingPathComponent("Pack/romfs/Model/Link.bin")
+        try fm.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("modified".utf8).write(to: source)
+        let library = ModLibrary(root: value.base.appendingPathComponent("Library"))
+        try library.importFolder(source.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent())
+        try library.setEnabled(try library.load().packs[0].id, enabled: true)
+        let stateBefore = try Data(contentsOf: library.root.appendingPathComponent("library.json"))
+        let mods = try XCTUnwrap(binding.prepareModLaunch(library: library))
+        try mods.verify(binding: binding)
+        let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("engine/scripts/dev/human_preview.py")
+        let plan = try binding.launchPlan(helper: helper, mods: mods)
+        XCTAssertEqual(Array(plan.arguments.suffix(4)), ["--mods-session", mods.launchID, "--mods-sha256", mods.handoffSHA256])
+        XCTAssertEqual(Set(plan.environment.keys), ["HOME", "USER", "LOGNAME", "PATH", "LANG"])
+        XCTAssertEqual(try Data(contentsOf: library.root.appendingPathComponent("library.json")), stateBefore)
+        XCTAssertEqual(try Data(contentsOf: source), Data("modified".utf8))
+        XCTAssertEqual(try Data(contentsOf: romfs.appendingPathComponent("romfs.bin")), original)
+        let manifest = binding.rootURL.appendingPathComponent("mods/\(mods.launchID)/mods/manifest.tsv")
+        try Data("# changed".utf8).write(to: manifest)
+        XCTAssertThrowsError(try binding.launchPlan(helper: helper, mods: mods))
+        XCTAssertFalse(fm.fileExists(atPath: value.root.appendingPathComponent("profile").path))
+    }
+
     func testMarkerMismatchAndBooleanSchemaRefused() throws {
         let value = try fixture()
         var object = value.object

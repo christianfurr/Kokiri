@@ -313,7 +313,7 @@ def partition_corpus(path, folder, batch_size=500, shader_list=None):
     return chunks
 
 
-def batch_completion(text, keys, verified, has_list=False, returncode=0, *, expected_listed_requests=0):
+def batch_completion(text, keys, verified, has_list=False, returncode=0, *, expected_listed_requests=0, require_cached=False):
     """Accept only actual native reports paired with this process's verified set."""
     if returncode:
         raise ValueError(f'seed batch exited with {returncode}')
@@ -334,6 +334,8 @@ def batch_completion(text, keys, verified, has_list=False, returncode=0, *, expe
     if (not verified or any(not VARIANT.fullmatch(name) for name in verified) or
         {name[:64] for name in verified} != set(keys) or variants != len(verified) or kept > variants):
         raise ValueError('seed batch verified set differs from its requests or corpus')
+    if require_cached and (made_again or kept!=variants):
+        raise ValueError('seed batch requires missing or incompatible translations; cached-only validation stopped')
     return dict(keys=list(keys), translated_default=completed, corpus_shaders=asked,
                 listed_variants=listed_done, listed_asked=listed_asked,
                 listed_requests=expected_listed_requests,
@@ -569,6 +571,29 @@ def require_complete(inventory, keys, done, listed=None):
         raise ValueError(f'incomplete listed shader variants: {listed.group(1)} of {listed.group(2)} bind states translated')
 
 
+def cached_seed_outputs(out, context, translator):
+    """Only reuse the already published, exact-context payload inventory."""
+    manifest=Path(out)/'seed-manifest.json'
+    previous=json.loads(manifest.read_text())
+    if not isinstance(previous,dict):
+        raise ValueError('cached-only seed manifest is malformed')
+    files=previous.get('files')
+    if (previous.get('chain')!=CHAIN or previous.get('translation_context_sha256')!=context or
+        previous.get('translator_sha256')!=sha256(translator) or not isinstance(files,dict) or not files or not GENERATED.issubset(files) or
+        previous.get('all_default') is not True or previous.get('only') or
+        type(previous.get('corpus_shaders')) is not int or previous['corpus_shaders']<=0 or
+        any(type(previous.get(field)) is not int or previous[field]<0 for field in ('translated_default','listed_variants','listed_asked')) or
+        previous.get('translated_default')!=previous['corpus_shaders'] or previous.get('listed_variants')!=previous.get('listed_asked') or
+        any(not isinstance(name,str) or Path(name).name!=name or not isinstance(digest,str) or
+            not re.fullmatch('[0-9a-f]{64}',digest) for name,digest in files.items())):
+        raise ValueError('cached-only seed validation needs a complete compatible published seed inventory')
+    # The publisher regenerates its three list/key metadata files from the
+    # freshly verified requests. The remaining names are exactly cache payloads.
+    payload={name:digest for name,digest in files.items() if name not in GENERATED}
+    if not payload:raise ValueError('cached-only seed payload inventory is empty')
+    return payload
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--version', required=True, help='the game folder name (oot)')
@@ -578,6 +603,7 @@ def main():
                    help='source-verified serviced translator installed by engine/build.py')
     p.add_argument('--list', type=Path, help="optional recorded bind states; OOT always extracts all resource shaders")
     p.add_argument('--jobs', type=int, default=2, help='bounded extraction/translation concurrency')
+    p.add_argument('--require-cached', action='store_true', help='validate runtime requests with translation disabled; refuse any cache miss')
     p.add_argument('--batch-size', type=int, default=500,
                    help='maximum known default plus recorded binding requests per process (1-500)')
     p.add_argument('--max-batches', type=int, help='bounded pilot; incomplete coverage exits 2 without publishing a seed')
@@ -588,6 +614,8 @@ def main():
     p.add_argument('--only', type=Path, help='translate only these shaders (one 64-hex key per line): a quick build\'s '
                    'seed (games/oot/build.py, the title rows\' shaders); the game translates the rest at first use')
     a = p.parse_args()
+    if a.require_cached and (a.resume_plan or a.publish_verified_only):
+        p.error('--require-cached needs fresh native request checks, not reconciliation of old evidence')
     if not 1 <= a.jobs <= 32:
         p.error('--jobs must be between 1 and 32')
     if not 1 <= a.batch_size <= 500:
@@ -634,6 +662,7 @@ def main():
         raise ValueError('missing source-built shader translator: ' + str(prebuilt))
     context = translation_context(prebuilt, a.depth_mode)
     cache = cache / context
+    expected_cached_outputs=cached_seed_outputs(out,context,prebuilt) if a.require_cached else None
     if a.publish_verified_only:
         from resume_shader_seed import reconcile_plan
         identity = dict(chain=CHAIN, version=v, source_romfs_sha256=romfs_sha, corpus_sha256=sha256(corpus),
@@ -671,6 +700,10 @@ def main():
                TOTK_NATIVE_DIR=str(native.resolve()), TOTK_SHADER_SEED='off', TOTK_RT_BG_WORKERS=str(a.jobs),
                TOTK_SHADER_SERVICE='native', TOTK_XLATE_SPIRV_CROSS='inproc',
                TOTK_SEED_VERIFY='1')
+    if a.require_cached:
+        # Existing no-translate path still performs actual variant_request and
+        # seed_verified checks; a miss cannot invoke the translator or be published.
+        env['TOTK_SHADER_NO_TRANSLATE']='1'
     batch_dir = a.logs/f'ns2-seed-{v}-batches-{time.time_ns()}'
     inventory = corpus_inventory(corpus)
     source_listed_total = source_listed_requests(seed_list, inventory)
@@ -702,7 +735,7 @@ def main():
                 checked = set(verified_list.read_text().split()) if verified_list.is_file() else set()
                 report = batch_completion(log.read_text(errors='replace'), batch['keys'], checked,
                                           bool(batch['list']), result,
-                                          expected_listed_requests=batch['listed_requests'])
+                                          expected_listed_requests=batch['listed_requests'], require_cached=a.require_cached)
                 if report['corpus_shaders']+report['listed_asked'] > batch['known_requests']:
                     raise ValueError('native batch requested more than the planned bound')
                 outputs, _ = verified_batch_outputs(cache, checked, batch['keys'], a.jobs)
@@ -730,7 +763,7 @@ def main():
     report = seed_metadata(a, prebuilt, context, romfs_sha, corpus, want, inventory, totals, progress, only)
     publish_seed(out, cache, verified, inventory, report, started_at=t0, shader_list=a.list,
                  scope_keys=sorted(corpus_inventory(full_corpus)) if only else None,
-                 logs=a.logs, jobs=a.jobs,
+                 logs=a.logs, jobs=a.jobs, expected_output_sha256=expected_cached_outputs,
                  protected_paths=(corpus, full_corpus, a.binary, prebuilt, service, batch_dir))
 
 

@@ -414,6 +414,30 @@ class PrivateRuntimeMetadataTests(unittest.TestCase):
     def test_private_compiled_runtime_does_not_advertise_overlay_support(self):
         info=self.package(self.capabilities,compiled=True)
         self.assertNotIn('KokiriRomFSModsVersion',info)
+        self.assertEqual(info['KokiriHumanPreviewModsVersion'],1)
+
+    def test_unproven_private_repackage_cannot_advertise_human_mods(self):
+        info=self.package(self.capabilities)
+        self.assertNotIn('KokiriHumanPreviewModsVersion',info)
+
+    def test_existing_archive_packaging_cannot_bypass_fresh_verify_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            with patch.object(build,'validate_runtime_app',return_value={}), \
+                 patch.object(build,'ensure_disk_space'), patch.object(build,'catalog_context',return_value={}), \
+                 patch.object(build,'verify_shader_resources',return_value={'chain':'fixture-chain'}), \
+                 patch.object(build,'shader_dirs',return_value=(root/'seed',root/'libraries','')), \
+                 patch.object(build,'resolve_lists',return_value=(root/'pso_title.tsv',root/'pso_manifest.tsv')), \
+                 patch.object(build,'compute_pipeline_archive',side_effect=ValueError('fresh archive miss')) as archive, \
+                 patch.object(build,'write_preparation_receipt') as receipt, \
+                 patch.object(build,'compile_shader_libraries') as compile_libraries:
+                with self.assertRaisesRegex(ValueError,'fresh archive miss'):
+                    build.package_app(root,root/'tree',root/'Candidate.app',mode='full',
+                                      compiled_runtime_sha256='a'*64,verify_existing_archives=True)
+                self.assertTrue(archive.call_args.kwargs['verify_only'])
+                archive.assert_called_once()
+                compile_libraries.assert_not_called()
+                receipt.assert_not_called()
 
     def test_ordinary_staged_update_stays_unmarked(self):
         info=self.package({},update=True)

@@ -121,6 +121,8 @@ def main():
                    help='same-chain runtime cache; include all its recorded patched variants (repeatable)')
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--jobs', type=int, default=4)
+    p.add_argument('--verify-existing-only', action='store_true',
+                   help='validate cached libraries with the freshly observed compiler; refuse any code generation')
     p.add_argument('--only', type=Path, help='compile only these shaders (one 64-hex key per line); the rest are compiled by the game at first use')
     a = p.parse_args()
     # Capture invocation-relative inputs before any compiler subprocess uses a
@@ -158,14 +160,26 @@ def main():
     context_key = compiler_context_key(observation)
     identity = ' '.join([compiler, *METAL_FLAGS, 'context-sha256='+context_key])
     stamp = a.out/'compiler.txt'
+    if a.verify_existing_only and (not stamp.is_file() or stamp.read_text()!=identity):
+        raise ValueError('existing library compiler context changed; refusing automatic recompilation')
     if stamp.is_file() and stamp.read_text() != identity:
         a.out.rename(a.out.with_name(a.out.name + '.previous-' + str(os.getpid())))
     a.out.mkdir(parents=True, exist_ok=True)
-    stamp.write_text(identity)
     manifest = a.out/'libraries-manifest.json'
     prior = json.loads(manifest.read_text()) if manifest.exists() else {}
+    if a.verify_existing_only and (prior.get('complete') is not True or prior.get('compiler')!=identity or
+                                   prior.get('compiler_context_sha256')!=context_key):
+        raise ValueError('existing library manifest is incomplete or has a different compiler context')
     known = prior.get('files', {}) if (prior.get('compiler') == identity and
                                       prior.get('compiler_context_sha256') == context_key) else {}
+    if a.verify_existing_only:
+        if not isinstance(known,dict) or not known:
+            raise ValueError('existing library inventory is missing')
+        for name,expected in known.items():
+            library=a.out/name
+            if (not re.fullmatch(r'[0-9a-f]{64}\.metallib',name) or not isinstance(expected,str) or
+                not re.fullmatch(r'[0-9a-f]{64}',expected) or library.is_symlink() or not library.is_file() or digest(library)!=expected):
+                raise ValueError('existing library is missing or corrupt: '+name)
     parser_depths = dict(prior.get('parser_depths', {})) if known else {}
     todo, source_hashes = {}, {}
     # A source the seed recorded as checked (prepare_ns2_seed.py record_verified) keeps that digest; the rest, and every
@@ -175,9 +189,9 @@ def main():
         seed_known.update(seed_record(cache))
     lib_record = recorded_libraries(a.out)
     read = [0, 0]
-    with concurrent.futures.ThreadPoolExecutor(min(16, (os.cpu_count() or 4) * 2)) as pool:
+    with concurrent.futures.ThreadPoolExecutor(a.jobs) as pool:
         def source_digest(src):
-            if seed_known.get(src.name) and src.parent.resolve() in {c.resolve() for c in a.cache}:
+            if not a.verify_existing_only and seed_known.get(src.name) and src.parent.resolve() in {c.resolve() for c in a.cache}:
                 return seed_known[src.name]
             read[0] += 1
             source_hash = digest(src)
@@ -191,7 +205,7 @@ def main():
                 return False
             entry = lib_record.get(lib.name)
             try:
-                if isinstance(entry, list) and len(entry) == 5 and entry[:4] == lib_identity(lib) and entry[4] == known[lib.name]:
+                if not a.verify_existing_only and isinstance(entry, list) and len(entry) == 5 and entry[:4] == lib_identity(lib) and entry[4] == known[lib.name]:
                     return True
             except OSError:
                 return False
@@ -205,6 +219,9 @@ def main():
             todo.setdefault(sha, src)
     print(f'{len(sources)} translated shaders, {len(todo)} to compile with {compiler} '
           f'({read[0]} sources and {read[1]} libraries read; the rest kept the digests recorded with them)', flush=True)
+    if a.verify_existing_only and todo:
+        raise ValueError(f'{len(todo)} libraries are missing, changed or incompatible; refusing automatic compilation')
+    stamp.write_text(identity)
 
     def compile_one(item):
         digest, src = item

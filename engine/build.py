@@ -722,7 +722,7 @@ def verify_staged_preparation_inputs(app,receipt):
         if actual!=receipt['artifact_sha256'].get(key):
             raise ValueError('staged preparation input differs from verified receipt: '+key)
 
-def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=None,mode=None,learned_caches=(),private_capabilities=None,compiled_runtime_sha256=None):
+def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=None,mode=None,learned_caches=(),private_capabilities=None,compiled_runtime_sha256=None,verify_existing_archives=False):
     """Stage a sealed App containing its runtime data, then replace the closed App. mode: shader_mode, recorded in the
     App (MNGShaders) for its updates and MNG Launcher. Private full builds read their owned output metadata;
     staged updates pass the source app's validated declarations before sealing the new runtime."""
@@ -747,8 +747,10 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
         for path in lists:path.write_text('# Kokiri unbundled development build: no prepared pipelines\n')
     else:
         lists=resolve_lists(tree,tree/f'build/warm-lists{suffix}',work/'logs',shared,mode)   # identical lists feed archive and App
-    pipelines=compute_pipeline_archive(work,tree,lists,mode) if shader_record else None
-    if pipelines:
+    if verify_existing_archives and (mode!='full' or compiled_runtime_sha256 is None or not shader_record):
+        raise ValueError('existing-archive packaging requires a newly compiled full runtime')
+    pipelines=compute_pipeline_archive(work,tree,lists,mode,verify_only=verify_existing_archives) if shader_record else None
+    if pipelines and not verify_existing_archives:
         # Archive construction records additional patched MSL. Compile those
         # exact sources, then verify PSOs against the same libraries play loads.
         archive_cache=tree/'build/compute-pipelines'/shader_record['chain']
@@ -759,6 +761,9 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
         verify_recorded_variant_coverage(shader_dirs(tree,mode)[1],(*learned_caches,archive_cache))
         if mode=='full':
             pipelines=compute_pipeline_archive(work,tree,lists,mode,verify_only=True)
+    elif pipelines:
+        archive_cache=tree/'build/compute-pipelines'/shader_record['chain']
+        verify_recorded_variant_coverage(shader_dirs(tree,mode)[1],(*learned_caches,archive_cache))
     receipt=write_preparation_receipt(work,tree,mode,pipelines)
     prepared=shader_bundle(tree,shader_record,mode) if shader_record else None
     opening_overlay=tree/'extracted/oot/opening-patches'
@@ -817,8 +822,11 @@ def package_app(work,tree,out,game_data_mode='app',game_data_folder=None,shared=
     info.update(private_capabilities)
     if compiled_runtime_sha256 is not None and not private_capabilities:
         # app/launcher.m preserves TOTK_ROMFS_MODS; runtime/romfs.c validates
-        # each overlay manifest. The private entry still explicitly disables it.
+        # each overlay manifest. Human previews use a separate pinned handoff.
         info['KokiriRomFSModsVersion']=1
+    elif compiled_runtime_sha256 is not None and private_capabilities.get('KokiriHumanPreviewVersion')==1:
+        # Emitted only for this current-source build, after copied/receipt hash checks.
+        info['KokiriHumanPreviewModsVersion']=1
     icon=tree/'build/KokiriAppIcon.icns'
     subprocess.run(['bash',GAME.parent/'macos/scripts/create_icon.sh',
                     GAME.parent/'assets/brand/kokiri-mark.png',icon],check=True)

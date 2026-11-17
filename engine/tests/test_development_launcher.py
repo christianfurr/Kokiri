@@ -37,14 +37,16 @@ static NSString *game_data_in(NSString *folder,unsigned long long size,NSString 
 static unsigned fixture_takeovers;
 void runtime_game_slot_user_takeover(void) { fixture_takeovers++; }
 int main(int argc,char **argv) { @autoreleasepool {
-    BOOL human=argc==5 && !strcmp(argv[4],"human");
+    BOOL human=(argc==5 || argc==7) && !strcmp(argv[4],"human");
     if(argc!=4 && !human) {
         char **boot=NULL;
         if(argc>1 && !strcmp(argv[1],"--kokiri-preview"))return kokiri_human_preview_launch(argc,argv,&boot);
         return kokiri_development_launch(argc,argv,&boot);
     }
     NSDictionary *receipt=nil;
-    if(!(human ? kokiri_private_prepare(@(argv[1]),@(argv[1]),@(argv[0]),@{},&receipt,YES) :
+    id capability=!strcmp(argv[3],"mods-bool") ? @YES : !strcmp(argv[3],"mods-unknown") ? @2 : @1;
+    if(!(human ? kokiri_private_prepare_mods(@(argv[1]),@(argv[1]),@(argv[0]),@{@"KokiriHumanPreviewModsVersion":capability},&receipt,YES,
+                                           argc==7 ? @(argv[5]) : nil,argc==7 ? @(argv[6]) : nil) :
                  kokiri_dev_prepare(@(argv[1]),@(argv[1]),@(argv[0]),@{},&receipt)))return 2;
     if(strcmp(argv[3],"none")) {
         [[NSJSONSerialization dataWithJSONObject:receipt options:0 error:nil] writeToFile:[@(argv[1]) stringByAppendingPathComponent:@"isolation.json"] atomically:YES];
@@ -70,6 +72,25 @@ int main(int argc,char **argv) { @autoreleasepool {
     [NSData.data writeToFile:capture atomically:YES];
     out[@"capture_allowed"]=@(runtime_kokiri_human_preview_command_allowed([[NSString stringWithFormat:@"wshot %@\n",capture] UTF8String]));
     out[@"external_capture_allowed"]=@(runtime_kokiri_human_preview_command_allowed("wshot /tmp/0123456789abcdef0123456789abcdef.png\n"));
+    int mod=runtime_kokiri_human_mods_open("Content/file.bin");
+    if(mod>=0) {
+        struct stat validated;fstat(mod,&validated);
+        out[@"mod_stable_before"]=@(romfs_overlay_unchanged(mod,&validated));
+        if(!strcmp(argv[3],"mutate-mod-after-open")) {
+            NSString *path=[@(argv[1]) stringByAppendingPathComponent:[NSString stringWithFormat:@"mods/%s/mods/Content/file.bin",argv[5]]];
+            int writer=open(path.fileSystemRepresentation,O_WRONLY|O_NOFOLLOW);char changed[16];memset(changed,'x',sizeof changed);
+            if(writer<0 || write(writer,changed,sizeof changed)!=sizeof changed)return 3;
+            struct timespec times[2]={validated.st_atimespec,validated.st_mtimespec};
+            if(futimens(writer,times))return 3;close(writer);
+        }
+        out[@"mod_stable_after"]=@(romfs_overlay_unchanged(mod,&validated));
+        char value[128]={0};ssize_t length=read(mod,value,sizeof(value)-1);close(mod);if(length>0)out[@"mod_file"]=@(value);
+    }
+    out[@"mod_escape_refused"]=@(runtime_kokiri_human_mods_open("../outside")<0);
+    unsigned remaining=64;int audit=open(argv[1],O_RDONLY|O_DIRECTORY);
+    out[@"bounded_profile_scan"]=@(kokiri_dev_tree(audit,0,&remaining,YES));close(audit);
+    remaining=64;audit=open(argv[1],O_RDONLY|O_DIRECTORY);
+    out[@"bounded_full_scan"]=@(kokiri_dev_tree(audit,0,&remaining,NO));close(audit);
     NSMutableDictionary *environment=[NSMutableDictionary new];
     for(char **entry=*_NSGetEnviron();*entry;entry++) {
         NSString *row=@(*entry);NSRange equals=[row rangeOfString:@"="];
@@ -109,14 +130,14 @@ int main(int argc,char **argv) { @autoreleasepool {
         (self.root / "lease.json").write_text(json.dumps({key: self.request[key] for key in
             ("schema", "session_id", "nonce", "expires_unix")}))
 
-    def run_fixture(self, action="none", human=False, **environment):
+    def run_fixture(self, action="none", human=False, mods=(), **environment):
         # Poisoned optional paths are inert in this fixture (no constructors or
         # game). Production SessionManager must start with a clean allowlist.
         env = {**os.environ, "KOKIRI_DEVELOPMENT_ROOT": str(self.root),
                "KOKIRI_DEVELOPMENT_NONCE": self.nonce, **environment}
         if human:
             env["KOKIRI_HUMAN_PREVIEW_ROOT"] = str(self.root)
-        return subprocess.run([str(self.binary), str(self.root), self.nonce, action, *(["human"] if human else [])], env=env,
+        return subprocess.run([str(self.binary), str(self.root), self.nonce, action, *(["human"] if human else []), *mods], env=env,
                               capture_output=True, text=True, timeout=10)
 
     def test_private_paths_and_inherited_write_paths(self):
@@ -210,6 +231,8 @@ int main(int argc,char **argv) { @autoreleasepool {
         self.assertNotIn("nonce", receipt)
         env = receipt["environment"]
         self.assertEqual(env["TOTK_SLOT_OWNER"], "user")
+        self.assertEqual(env["TOTK_ROMFS_MODS"], "0")
+        self.assertNotIn("KOKIRI_HUMAN_MOD_MANIFEST_SHA256", env)
         for key in ("KOKIRI_DEVELOPMENT_ROOT", "KOKIRI_DEVELOPMENT_NONCE", "TOTK_AGENT_LIMIT_S", "TOTK_AGENT_IDLE_S", "TOTK_GAME_SLOT_FD"):
             self.assertNotIn(key, env)
         self.assertTrue(receipt["position_allowed"])
@@ -243,6 +266,96 @@ int main(int argc,char **argv) { @autoreleasepool {
         (self.root / "preview.json").write_text(json.dumps(request))
         (self.root / "ownership.json").write_text("{}")
         self.assertEqual(self.run_fixture(human=True).returncode, 2)
+
+    def prepare_mods(self):
+        preview = self.prepare_human()
+        self.mod_id = "d" * 32
+        self.mod_folder = self.root / "mods" / self.mod_id
+        self.mod_payload = self.mod_folder / "mods"
+        for p in (self.root / "mods", self.mod_folder, self.mod_payload):
+            p.mkdir(mode=0o700)
+        (self.mod_payload / "Content").mkdir(mode=0o700)
+        data = b"native-validated"
+        (self.mod_payload / "Content/file.bin").write_bytes(data)
+        manifest = f"Content/file.bin\t{len(data)}\t{hashlib.sha256(data).hexdigest()}\t{'b' * 64}\n"
+        (self.mod_payload / "manifest.tsv").write_text(manifest)
+        self.mod_record = {"schema": 1, "kind": "human-mod-overlay", "session_id": preview["session_id"],
+                           "launch_id": self.mod_id, "executable_sha256": self.digest,
+                           "manifest_sha256": hashlib.sha256(manifest.encode()).hexdigest()}
+        self.save_mods()
+
+    def save_mods(self):
+        data = json.dumps(self.mod_record).encode()
+        (self.mod_folder / "handoff.json").write_bytes(data)
+        self.mod_hash = hashlib.sha256(data).hexdigest()
+
+    def test_human_mods_keep_owner_and_use_descriptor_scoped_payload(self):
+        self.prepare_mods()
+        result = self.run_fixture("slot-acquired", human=True, mods=(self.mod_id, self.mod_hash),
+                                  TOTK_ROMFS_MODS="/foreign/applied", KOKIRI_HUMAN_MOD_MANIFEST_SHA256="a" * 64)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertEqual(receipt["owner"], "user")
+        self.assertEqual(receipt["control"], "observation-only")
+        self.assertFalse(receipt["active"])
+        self.assertFalse(receipt["movement_allowed"])
+        self.assertFalse(receipt["close_allowed"])
+        self.assertTrue(receipt["mod_escape_refused"])
+        self.assertEqual(receipt["mod_file"], "native-validated")
+        self.assertEqual(receipt["environment"]["TOTK_ROMFS_MODS"], str(self.mod_payload))
+        self.assertEqual(receipt["environment"]["KOKIRI_HUMAN_MOD_MANIFEST_SHA256"], self.mod_record["manifest_sha256"])
+        self.assertEqual(receipt["mods_handoff"]["launch_id"], self.mod_id)
+
+    def test_human_mods_reject_capability_hash_mutation_and_stale_binding(self):
+        self.prepare_mods()
+        for action in ("mods-bool", "mods-unknown"):
+            self.assertEqual(self.run_fixture(action, human=True, mods=(self.mod_id, self.mod_hash)).returncode, 2)
+        self.assertEqual(self.run_fixture(human=True, mods=(self.mod_id, "0" * 64)).returncode, 2)
+        self.mod_record["session_id"] = "f" * 32
+        self.save_mods()
+        self.assertEqual(self.run_fixture(human=True, mods=(self.mod_id, self.mod_hash)).returncode, 2)
+
+    def test_human_mods_reject_changed_payload_links_and_malformed_manifest(self):
+        self.prepare_mods()
+        target = self.mod_payload / "Content/file.bin"
+        target.write_bytes(b"tampered")
+        self.assertEqual(self.run_fixture(human=True, mods=(self.mod_id, self.mod_hash)).returncode, 2)
+        outside = self.root.parent / "outside.bin"
+        outside.write_bytes(b"native-validated")
+        target.unlink()
+        target.symlink_to(outside)
+        self.assertEqual(self.run_fixture(human=True, mods=(self.mod_id, self.mod_hash)).returncode, 2)
+        target.unlink()
+        os.link(outside, target)
+        self.assertEqual(self.run_fixture(human=True, mods=(self.mod_id, self.mod_hash)).returncode, 2)
+        target.unlink()
+        target.write_bytes(b"native-validated")
+        manifest = "Content/file.bin\t16\t" + "a" * 64 + "\t-\textra\n"
+        (self.mod_payload / "manifest.tsv").write_text(manifest)
+        self.mod_record["manifest_sha256"] = hashlib.sha256(manifest.encode()).hexdigest()
+        self.save_mods()
+        self.assertEqual(self.run_fixture(human=True, mods=(self.mod_id, self.mod_hash)).returncode, 2)
+
+    def test_private_overlay_detects_in_place_mutation_after_open_with_restored_mtime(self):
+        self.prepare_mods()
+        result = self.run_fixture("mutate-mod-after-open", human=True, mods=(self.mod_id, self.mod_hash))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertTrue(receipt["mod_stable_before"])
+        self.assertFalse(receipt["mod_stable_after"])
+
+    def test_inert_snapshot_history_does_not_consume_unmodded_profile_audit(self):
+        self.prepare_human()
+        history = self.root / "mods/history"
+        history.mkdir(mode=0o700, parents=True)
+        for n in range(100):
+            (history / str(n)).write_text("inert old snapshot")
+        result = self.run_fixture(human=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertTrue(receipt["bounded_profile_scan"])
+        self.assertFalse(receipt["bounded_full_scan"])
+        self.assertEqual(receipt["environment"]["TOTK_ROMFS_MODS"], "0")
 
     def test_development_entry_rejects_all_preview_markers_before_writes(self):
         marker = self.root / "preview.json"

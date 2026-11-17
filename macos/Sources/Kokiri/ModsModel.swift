@@ -23,11 +23,11 @@ import KokiriCore
     var selectedPacks: [ModPack] { state.orderedPacks }
     var macNativeAvailable: Bool { FileManager.default.isReadableFile(atPath: ModLibrary.macNativeLibrary.appendingPathComponent("library.json").path) }
 
-    func setContext(installation: GameInstallation?, gameRunning: Bool, launchSupported: Bool = true) {
+    func setContext(installation: GameInstallation?, gameRunning: Bool, launchSupported: Bool = true, mode: ModLaunchMode = .ordinary) {
         self.installation = installation
         self.gameRunning = gameRunning
         if !launchSupported { launchBlocker = "This preview doesn’t launch mods. Play continues without mods." }
-        else if let installation { launchBlocker = ModLibrary.launchBlocker(app: installation.app) }
+        else if let installation { launchBlocker = ModLibrary.launchBlocker(app: installation.app, mode: mode) }
         else { launchBlocker = "Connect a game in Setup before playing with mods." }
     }
 
@@ -75,6 +75,13 @@ import KokiriCore
         return try await Task.detached(priority: .userInitiated) {
             try library.prepareLaunch(app: app, gameDataFolder: gameDataFolder, sessionFolder: sessionFolder)
         }.value
+    }
+
+    func prepareHumanLaunch(binding: HumanPreviewBinding) async throws -> HumanModLaunch? {
+        guard !busy, !gameRunning else { throw KokiriError.message("Finish the current game or mod operation before preparing mods.") }
+        busy = true; defer { busy = false }
+        let library = library
+        return try await Task.detached(priority: .userInitiated) { try binding.prepareModLaunch(library: library) }.value
     }
 
     func dismissMessage() { message = nil }

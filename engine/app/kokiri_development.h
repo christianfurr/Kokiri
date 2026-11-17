@@ -19,6 +19,7 @@ static NSDictionary *kokiri_dev_receipt;
 static _Atomic int kokiri_dev_slot_ready, kokiri_dev_taken_over;
 static BOOL kokiri_private_human;
 static int kokiri_preview_directory = -1; /* Held for the human process lifetime. */
+static int kokiri_human_mod_directory = -1; /* Kept for descriptor-relative reads for this launch. */
 
 static BOOL kokiri_dev_hex(id value, NSUInteger length) {
     return [value isKindOfClass:NSString.class] && [value length] == length &&
@@ -45,7 +46,7 @@ static BOOL kokiri_dev_related(NSString *a, NSString *b) {
     }
     return NO;
 }
-static BOOL kokiri_dev_tree(int directory, unsigned depth, unsigned *remaining) {
+static BOOL kokiri_dev_tree(int directory, unsigned depth, unsigned *remaining, BOOL humanRoot) {
     if (depth > 32) return NO;
     int copy = dup(directory);
     DIR *entries = copy >= 0 ? fdopendir(copy) : NULL;
@@ -60,8 +61,11 @@ static BOOL kokiri_dev_tree(int directory, unsigned depth, unsigned *remaining) 
         if (fstatat(directory,entry->d_name,&info,AT_SYMLINK_NOFOLLOW) || info.st_uid != getuid()) { good = NO; break; }
         if (S_ISREG(info.st_mode)) { if (info.st_nlink != 1) { good = NO; break; } }
         else if (S_ISDIR(info.st_mode)) {
+            /* Historical mod snapshots are inert. Only the requested handoff is
+               audited separately, so old payloads cannot exhaust profile checks. */
+            if(humanRoot && !depth && !strcmp(entry->d_name,"mods"))continue;
             int child = openat(directory,entry->d_name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
-            good = child >= 0 && kokiri_dev_tree(child,depth+1,remaining);
+            good = child >= 0 && kokiri_dev_tree(child,depth+1,remaining,NO);
             if (child >= 0) close(child);
             if (!good) break;
         } else { good = NO; break; }
@@ -215,7 +219,11 @@ static void kokiri_dev_clean_environment(void) {
     for (NSString *name in remove) unsetenv(name.UTF8String);
     setenv("PATH","/usr/bin:/bin:/usr/sbin:/sbin",1);
 }
-static BOOL kokiri_private_prepare(NSString *root, NSString *resources, NSString *executable, NSDictionary *bundleInfo, NSDictionary **receipt, BOOL human) {
+#include "kokiri_human_mods.h"
+int runtime_kokiri_human_mods_open(const char *name) {
+    return kokiri_human_mod_directory>=0 ? romfs_overlay_open(kokiri_human_mod_directory,name) : -1;
+}
+static BOOL kokiri_private_prepare_mods(NSString *root, NSString *resources, NSString *executable, NSDictionary *bundleInfo, NSDictionary **receipt, BOOL human, NSString *modLaunch, NSString *modHash) {
     if (!root.isAbsolutePath || strlen(root.fileSystemRepresentation) > 768 || [root rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound) return NO;
     char canonical[PATH_MAX];
     if (!realpath(root.fileSystemRepresentation,canonical) || ![root isEqualToString:@(canonical)]) return NO;
@@ -237,7 +245,7 @@ static BOOL kokiri_private_prepare(NSString *root, NSString *resources, NSString
     int directory = open(root.fileSystemRepresentation,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
     if (directory < 0) return NO;
     struct stat info; unsigned remaining=100000;
-    BOOL good = !fstat(directory,&info) && info.st_uid==getuid() && (info.st_mode&0777)==0700 && kokiri_dev_tree(directory,0,&remaining);
+    BOOL good = !fstat(directory,&info) && info.st_uid==getuid() && (info.st_mode&0777)==0700 && kokiri_dev_tree(directory,0,&remaining,human);
     if (good && human && flock(directory,LOCK_EX|LOCK_NB)) good=NO;
     NSDictionary *request=good?kokiri_dev_json(directory,human ? "preview.json" : "request.json"):nil;
     double expiry=kokiri_dev_number(request[@"expires_unix"])?[request[@"expires_unix"] doubleValue]:0, now=NSDate.date.timeIntervalSince1970;
@@ -263,6 +271,11 @@ static BOOL kokiri_private_prepare(NSString *root, NSString *resources, NSString
     if (!human && (!fstatat(directory,"isolation.json",&previous,AT_SYMLINK_NOFOLLOW) || !fstatat(directory,"revoked",&previous,AT_SYMLINK_NOFOLLOW))) good=NO;
     NSString *digest=good?kokiri_dev_hash(executable):nil;
     good = good && [digest isEqual:request[@"executable_sha256"]];
+    NSDictionary *mods=nil; int modDirectory=-1;
+    if(modLaunch || modHash) {
+        mods=good && human ? kokiri_human_mods(directory,root,request,bundleInfo,modLaunch,modHash,&modDirectory) : nil;
+        good=good && mods!=nil;
+    }
     for (NSString *name in @[@"profile",@"settings",@"settings/game",@"cache",@"logs",@"proof",@"contributions",@"mods",@"tmp",@"captures"]) {
         if (!good) break;
         NSString *path=[root stringByAppendingPathComponent:name];
@@ -280,7 +293,7 @@ static BOOL kokiri_private_prepare(NSString *root, NSString *resources, NSString
             if(fd>=0)close(fd);
         }
     }
-    if (!good) { close(directory); return NO; }
+    if (!good) { if(modDirectory>=0)close(modDirectory);close(directory); return NO; }
     NSString *profile=[root stringByAppendingPathComponent:@"profile"], *settings=[root stringByAppendingPathComponent:@"settings/game"];
     NSDictionary *paths=@{@"profile":profile,@"settings":settings,@"cache":[root stringByAppendingPathComponent:@"cache"],@"logs":[root stringByAppendingPathComponent:@"logs"],
         @"proof":[root stringByAppendingPathComponent:@"proof"],@"contributions":[root stringByAppendingPathComponent:@"contributions"],@"mods":[root stringByAppendingPathComponent:@"mods"],
@@ -307,6 +320,8 @@ static BOOL kokiri_private_prepare(NSString *root, NSString *resources, NSString
         for (unsigned i=0;i<sizeof remove/sizeof *remove;i++) unsetenv(remove[i]);
         if (!kokiri_dev_set("KOKIRI_HUMAN_PREVIEW_ROOT",root) || setenv("TOTK_SLOT_OWNER","user",1) ||
             setenv("TOTK_SLOT_PURPOSE","human-preview",1)) { close(directory); return NO; }
+        if(mods && (!kokiri_dev_set("TOTK_ROMFS_MODS",mods[@"overlay"]) ||
+                    !kokiri_dev_set("KOKIRI_HUMAN_MOD_MANIFEST_SHA256",mods[@"manifest_sha256"]))) { close(directory);return NO; }
     }
     NSString *source=bundleInfo[@"KokiriSourceCommit"]; if([source isKindOfClass:NSString.class])kokiri_dev_set("TOTK_SOURCE_COMMIT",source);
     struct rusage_info_v4 usage={0};
@@ -318,25 +333,32 @@ static BOOL kokiri_private_prepare(NSString *root, NSString *resources, NSString
     identity[@"owner"]=human ? @"user" : @"kokiri-dev";
     identity[@"control"]=human ? @"observation-only" : @"leased-development";
     identity[@"kind"]=human ? @"human-preview" : @"development";
+    if(mods)identity[@"mods_handoff"]=mods;
     if (!human) { identity[@"nonce"]=request[@"nonce"];identity[@"expires_unix"]=@(expiry); }
     *receipt=identity;
     kokiri_dev_root=[root copy];kokiri_dev_session=[request[@"session_id"] copy];kokiri_dev_nonce=[request[@"nonce"] copy];
     kokiri_dev_expires=expiry;kokiri_dev_device=info.st_dev;kokiri_dev_inode=info.st_ino;
     kokiri_dev_receipt=[(*receipt) copy];
     kokiri_private_human=human;
+    kokiri_human_mod_directory=modDirectory;
     if(human)kokiri_preview_directory=directory;else close(directory);
     return YES;
+}
+static BOOL kokiri_private_prepare(NSString *root, NSString *resources, NSString *executable, NSDictionary *bundleInfo, NSDictionary **receipt, BOOL human) {
+    return kokiri_private_prepare_mods(root,resources,executable,bundleInfo,receipt,human,nil,nil);
 }
 static BOOL kokiri_dev_prepare(NSString *root, NSString *resources, NSString *executable, NSDictionary *bundleInfo, NSDictionary **receipt) {
     return kokiri_private_prepare(root,resources,executable,bundleInfo,receipt,NO);
 }
 static int kokiri_private_launch(int argc,char **argv,char ***boot,BOOL human) {
-    if(argc!=3) { fprintf(stderr,"[kokiri-development] expected one private root\n"); return 1; }
+    BOOL modArguments=human && argc==7 && !strcmp(argv[3],"--mods-session") && !strcmp(argv[5],"--mods-sha256");
+    if(argc!=3 && !modArguments) { fprintf(stderr,"[kokiri-development] expected one private root and optional validated mods handoff\n"); return 1; }
     NSString *root=@(argv[2]), *resources=[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"totk"];
     char executable[PROC_PIDPATHINFO_MAXSIZE];
     if(proc_pidpath(getpid(),executable,sizeof executable)<=0) return 1;
     NSDictionary *receipt=nil;
-    if(!(human ? kokiri_private_prepare(root,resources,@(executable),NSBundle.mainBundle.infoDictionary,&receipt,YES) :
+    if(!(human ? kokiri_private_prepare_mods(root,resources,@(executable),NSBundle.mainBundle.infoDictionary,&receipt,YES,
+                                           modArguments ? @(argv[4]) : nil,modArguments ? @(argv[6]) : nil) :
                  kokiri_dev_prepare(root,resources,@(executable),NSBundle.mainBundle.infoDictionary,&receipt))) {
         fprintf(stderr,"[kokiri-development] invalid or expired isolated session request\n");return 1;
     }
