@@ -53,6 +53,11 @@ def publication_sql_only(action, first, second, database, source):
 
 
 def verify_database(db, trusted):
+    # Bound SQLite values before Python materializes a corrupt existing row.
+    for table, column in (('packs', 'body'), ('manifests', 'envelope')):
+        sdk.require(db.execute('SELECT 1 FROM ' + table + ' WHERE typeof(' + column +
+                    ") <> 'text' OR length(CAST(" + column + ' AS BLOB)) > 262144 LIMIT 1').fetchone() is None,
+                    'published input bounds')
     sdk.require(db.execute('PRAGMA quick_check').fetchall() == [('ok',)]
                 and not db.execute('PRAGMA foreign_key_check').fetchall(), 'catalog integrity')
     actual = db.execute('SELECT (SELECT count(*) FROM contexts), (SELECT count(*) FROM inbox)').fetchone()
