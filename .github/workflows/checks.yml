@@ -94,6 +94,13 @@ jobs:
           "$KOKIRI_RELEASE_VENV/bin/python" -B -m unittest discover -s release -p 'test_*.py' -v
       - run: bash macos/test.sh
       - run: bash macos/build.sh
+      - name: Package source-only app preview
+        run: ditto -c -k --keepParent macos/build/Kokiri.app "$RUNNER_TEMP/Kokiri-preview.zip"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Kokiri-preview
+          path: ${{ runner.temp }}/Kokiri-preview.zip
+          retention-days: 7
       - run: python3 -I -m unittest discover -s engine/tests -p test_oot_live_bridge.py -v
       - name: Check native development ownership and human takeover
         run: |
