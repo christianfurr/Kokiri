@@ -1,7 +1,8 @@
 ---
 id: CN-003
 title: Curate contribution snapshots and publish guarded revisions
-status: in_progress
+status: closed
+closed: 2026-11-17
 type: feature
 priority: 1
 feature: 2026-11-17-catalog-play-ready
