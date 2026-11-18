@@ -4,7 +4,7 @@
 #include "game_data.h"
 #include "game_version.h"
 #include "fs_host.h"
-#include "romfs_path.h"
+#include "romfs_overlay.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <TargetConditionals.h>
 #include <fcntl.h>
@@ -91,9 +91,15 @@ static uint64_t handles[NH]; /* file index + 1; 0 is free */
    A line whose original SHA-256 is "-" adds a file the RomFS lacks (issue #48: The Second Quest adds 874): it is numbered
    after the RomFS's own files (file_count + k, k in path order, added[]), opens and reads like a replacement, and its
    folders exist for runtime_romfs_entry_type. The RomFS has no directory listing here, so nothing else needs to know. */
-typedef struct { uint64_t index,size; char *path; dev_t dev; ino_t ino; struct timespec mtime; char *name; char sha[65]; } Overlay;
+typedef struct { uint64_t index,size; char *path; dev_t dev; ino_t ino; struct timespec mtime; char *name; char sha[65]; int private_mod; struct stat validated; } Overlay;
+#if TARGET_OS_IPHONE
+static int runtime_kokiri_human_mods_open(const char *name) { (void)name;return -1; }
+#else
+extern int runtime_kokiri_human_mods_open(const char *name);
+#endif
 static Overlay *overlays; /* sorted by RomFS index after overlay_init */
 static size_t noverlay,overlay_cap;
+static int private_overlay_active;
 #define ADDED UINT64_MAX   /* an added file's index until overlay_init numbers it */
 static char **added;       /* RomFS paths of the added files, sorted; added[k] is index file_count + k */
 static size_t nadded;
@@ -205,7 +211,18 @@ static int path_ok(const char *p);
    mod's own file (issue #73: translations replace the UI archive the build patches for the quick-menu capture). Its
    original is then the build's checked file, so the RomFS original is not read again. Any other collision stops the start. */
 static void overlay_load(const char *dir,int required,int mods) {
- char path[4096];need(snprintf(path,sizeof(path),"%s/manifest.tsv",dir)<(int)sizeof(path),"RomFS overlay path");FILE *m=fopen(path,"r");
+ const char *pin=mods ? getenv("KOKIRI_HUMAN_MOD_MANIFEST_SHA256") : NULL;
+ int scoped=pin!=NULL;
+ char path[4096];need(snprintf(path,sizeof(path),"%s/manifest.tsv",dir)<(int)sizeof(path),"RomFS overlay path");
+ int manifest_fd=scoped ? runtime_kokiri_human_mods_open("manifest.tsv") : -1;
+ struct stat manifest_identity={0};
+ FILE *m=scoped ? (manifest_fd>=0 ? fdopen(manifest_fd,"r") : NULL) : fopen(path,"r");
+ if(scoped && !m)runtime_fail("Required private mod manifest is unavailable");
+ if(scoped) {
+  need(strlen(pin)==64&&!fstat(fileno(m),&manifest_identity)&&manifest_identity.st_size>0&&manifest_identity.st_size<=(8<<20),"private mod manifest bounds");
+  sha_range(fileno(m),0,(uint64_t)manifest_identity.st_size,pin,"private mod manifest");
+  need(romfs_overlay_unchanged(fileno(m),&manifest_identity),"private mod manifest changed during hashing");
+ }
  if(!m&&required){fprintf(stderr,"[totk] RomFS overlay: %s missing; build it with scripts/make_output_res_overlay.py <w>x<h>\n",path);runtime_fail("true-2K HeapDef overlay missing (make romfs-patches-out OUTPUT_RES=<w>x<h>)");}
  if(!m){fprintf(stderr,"[totk] RomFS overlay: none (%s)\n",path);return;}
  char line[8192];size_t first=noverlay,replaced=0;uint64_t hashed=0,t0=runtime_now_ns();
@@ -217,15 +234,25 @@ static void overlay_load(const char *dir,int required,int mods) {
   if(known&&add){fprintf(stderr,"[totk] RomFS overlay: %s/manifest.tsv adds %s, which the RomFS already has; give its original's SHA-256\n",dir,name);runtime_fail("RomFS overlay adds a file the RomFS already has");}
   size_t over=SIZE_MAX;if(mods&&known)for(size_t k=0;k<first;k++)if(overlays[k].index==i&&!strcmp(overlays[k].sha,orig)){over=k;break;}
   Entry e={0};if(known){e=entry(i);if(over==SIZE_MAX)sha_range(image_fd,e.offset,e.size,orig,"original");}else i=ADDED;
-  char file[8200];need(snprintf(file,sizeof(file),"%s/%s",dir,name)<(int)sizeof(file),"RomFS overlay file path");int fd=open(file,O_RDONLY|O_CLOEXEC);struct stat st;
-  need(fd>=0&&fstat(fd,&st)==0&&(uint64_t)st.st_size==size,"RomFS overlay file missing or wrong size");sha_range(fd,0,size,sha,name);close(fd);
+   char file[8200];need(snprintf(file,sizeof(file),"%s/%s",dir,name)<(int)sizeof(file),"RomFS overlay file path");
+   int fd=scoped ? runtime_kokiri_human_mods_open(name) : open(file,O_RDONLY|O_CLOEXEC);struct stat st;
+  need(fd>=0&&fstat(fd,&st)==0&&(uint64_t)st.st_size==size,"RomFS overlay file missing or wrong size");sha_range(fd,0,size,sha,name);
+  if(scoped)need(romfs_overlay_unchanged(fd,&st),"private mod file changed during hashing");
+  close(fd);
   hashed+=(over==SIZE_MAX?e.size:0)+size;
   if(noverlay==overlay_cap){overlay_cap=overlay_cap?overlay_cap*2:16;overlays=realloc(overlays,overlay_cap*sizeof(*overlays));need(overlays!=NULL,"RomFS overlay table");}
-  char *copy=strdup(file),*rel=strdup(name);need(copy&&rel,"RomFS overlay path copy");Overlay o={i,size,copy,st.st_dev,st.st_ino,st.st_mtimespec,rel,{0}};memcpy(o.sha,sha,65);
+   char *copy=strdup(file),*rel=strdup(name);need(copy&&rel,"RomFS overlay path copy");Overlay o={i,size,copy,st.st_dev,st.st_ino,st.st_mtimespec,rel,{0},scoped,st};memcpy(o.sha,sha,65);
+  if(scoped)private_overlay_active=1;
   if(over!=SIZE_MAX){fprintf(stderr,"[totk] RomFS overlay: %s (%llu bytes) replaces the build's overlay %s (the mod holds its edit)\n",name,size,overlays[over].path);
    free(overlays[over].path);free(overlays[over].name);overlays[over]=o;replaced++;continue;}
   overlays[noverlay++]=o;
   if(noverlay-first<=16)fprintf(stderr,"[totk] RomFS overlay: %s (%llu bytes) %s\n",name,size,add?"is added":"replaces the original");
+ }
+ if(scoped) {
+  need(romfs_overlay_unchanged(fileno(m),&manifest_identity),"private mod manifest changed while parsing");
+  sha_range(fileno(m),0,(uint64_t)manifest_identity.st_size,pin,"private mod manifest after validation");
+  need(romfs_overlay_unchanged(fileno(m),&manifest_identity),"private mod manifest changed after validation");
+  need(noverlay>first||replaced,"private mod overlay is empty");
  }
  fclose(m);
  if(noverlay-first>16)fprintf(stderr,"[totk] RomFS overlay: %zu files from %s (%zu more not listed)\n",noverlay-first+replaced,dir,noverlay-first-16);
@@ -355,9 +382,10 @@ unsigned runtime_romfs_open(uint64_t *out,const char *path,int mode) {
  fs_log("rom",path?path:"(null)");
  if(!out||mode!=1)return UNSUPPORTED;const char *p=rom_path(path);if(!p)return NOT_FOUND;uint64_t i=file_index(p);if(i==UINT64_MAX)return NOT_FOUND;
  uint32_t ov=overlay_slot(i);int fd=-1;
- if(ov){const Overlay *o=&overlays[ov-1];fd=open(o->path,O_RDONLY|O_CLOEXEC);struct stat st;
+ if(ov){const Overlay *o=&overlays[ov-1];fd=o->private_mod ? runtime_kokiri_human_mods_open(o->name) : open(o->path,O_RDONLY|O_CLOEXEC);struct stat st;
   fs_log("overlay",o->path);
-  if(fd<0||fstat(fd,&st)!=0||(uint64_t)st.st_size!=o->size||st.st_dev!=o->dev||st.st_ino!=o->ino||st.st_mtimespec.tv_sec!=o->mtime.tv_sec||st.st_mtimespec.tv_nsec!=o->mtime.tv_nsec){
+  if(fd<0||fstat(fd,&st)!=0||(uint64_t)st.st_size!=o->size||st.st_dev!=o->dev||st.st_ino!=o->ino||st.st_mtimespec.tv_sec!=o->mtime.tv_sec||st.st_mtimespec.tv_nsec!=o->mtime.tv_nsec||
+     (o->private_mod&&!romfs_overlay_unchanged(fd,&o->validated))){
    fprintf(stderr,"[totk] RomFS overlay: %s is missing or changed since the start check\n",o->path);runtime_fail("RomFS overlay file changed while the game ran (restart the game)");}}
  pthread_mutex_lock(&lock);for(unsigned j=1;j<NH;j++)if(!handles[j]){handles[j]=i+1;handle_ovl[j]=ov;handle_fd[j]=fd;*out=0x100000000ULL+j;pthread_mutex_unlock(&lock);return 0;}pthread_mutex_unlock(&lock);runtime_fail("file handle table full");return INVALID;
 }
@@ -367,14 +395,22 @@ static void handle_source(uint64_t h,const Entry *e,int *fd,uint64_t *base,uint6
  pthread_mutex_lock(&lock);uint32_t ov=handle_ovl[h-0x100000000ULL];int ofd=handle_fd[h-0x100000000ULL];pthread_mutex_unlock(&lock);
  if(ov){*fd=ofd;*base=0;*size=overlays[ov-1].size;}else{*fd=image_fd;*base=e->offset;*size=e->size;}
 }
+static void private_overlay_read_check(uint64_t handle, int fd) {
+ if(!private_overlay_active)return;
+ pthread_mutex_lock(&lock);uint32_t ov=handle_ovl[handle-0x100000000ULL];pthread_mutex_unlock(&lock);
+ if(ov && overlays[ov-1].private_mod)
+  need(romfs_overlay_unchanged(fd,&overlays[ov-1].validated),"private mod file changed during game read");
+}
 unsigned runtime_romfs_read(uint64_t *out,uint64_t h,int64_t offset,void *buffer,uint64_t size) {
  Entry e;if(!out||offset<0||!handle_entry(h,&e))return INVALID;int fd;uint64_t base,fsize;handle_source(h,&e,&fd,&base,&fsize);if((uint64_t)offset>fsize||(!buffer&&size))return INVALID;
+ private_overlay_read_check(h,fd);
  uint64_t n=size;if(n>fsize-(uint64_t)offset)n=fsize-(uint64_t)offset;uint64_t done=0;
  static _Atomic int profile_mode=-1;int profile=atomic_load(&profile_mode);if(profile<0){profile=getenv("TOTK_FS_TIMING")!=NULL;atomic_store(&profile_mode,profile);}uint64_t prep_start=profile?runtime_now_ns():0;
  dm_guest_write_prepare(buffer,(size_t)n);
  uint64_t t0=profile?runtime_now_ns():0;
  if(fd==image_fd&&image_map){memcpy(buffer,image_map+base+(uint64_t)offset,(size_t)n);done=n;}
  else while(done<n){size_t chunk=(size_t)(n-done);if(chunk>8<<20)chunk=8<<20;ssize_t r=src_pread(fd,(uint8_t *)buffer+done,chunk,(off_t)(base+(uint64_t)offset+done));if(r<=0)runtime_fail("RomFS read failure");done+=(uint64_t)r;}
+ private_overlay_read_check(h,fd);
  if(profile){uint64_t now=runtime_now_ns();atomic_fetch_add(&read_calls,1);atomic_fetch_add(&read_bytes,done);atomic_fetch_add(&read_ns,now-t0);atomic_fetch_add(&read_prepare_ns,t0-prep_start);
   uint64_t last=atomic_load(&read_report_ns);
   if(now-last>1000000000ULL&&atomic_compare_exchange_strong(&read_report_ns,&last,now))

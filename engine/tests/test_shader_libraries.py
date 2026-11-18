@@ -18,6 +18,39 @@ toolchain=sys.modules['metal_toolchain']
 
 
 class LibraryTests(unittest.TestCase):
+    def test_cache_only_library_validation_refuses_codegen_and_context_drift(self):
+        for damage in ('none', 'missing', 'corrupt', 'source', 'context', 'incomplete'):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as folder:
+                root=Path(folder);cache=root/'cache';cache.mkdir();out=root/'libs';out.mkdir()
+                source=cache/'fixture_b.metal';source.write_text('kernel void main0() {}')
+                library=out/(libraries.digest(source)+'.metallib');library.write_bytes(b'verified library')
+                observation=self.qualified_observation();key=libraries.compiler_context_key(observation)
+                identity=' '.join(['fixture',*libraries.METAL_FLAGS,'context-sha256='+key])
+                (out/'compiler.txt').write_text(identity)
+                (out/'libraries-manifest.json').write_text(json.dumps(dict(complete=damage!='incomplete',compiler=identity,
+                    compiler_context_sha256=key,compiler_observation=observation,files={library.name:libraries.digest(library)})))
+                if damage=='missing':library.unlink()
+                elif damage=='corrupt':library.write_bytes(b'corrupt library')
+                elif damage=='source':source.write_text('kernel void changed() {}')
+                elif damage=='context':
+                    observation=dict(observation,resource_headers=dict(content_sha256='e'*64))
+                before={p.name:p.read_bytes() for p in out.iterdir()}
+                with mock.patch.object(sys,'argv',['build_shader_libs.py','--cache',str(cache),'--out',str(out),'--jobs','2','--verify-existing-only']), \
+                     mock.patch.object(libraries,'metal_compiler',return_value=('/private/fixture-driver','fixture',{})), \
+                     mock.patch.object(libraries,'compiler_observation',return_value=observation), \
+                     mock.patch.object(libraries,'GameSlot',return_value=contextlib.nullcontext()), \
+                     mock.patch.object(libraries.subprocess,'run') as codegen:
+                    if damage=='none':
+                        with self.assertRaises(SystemExit) as done:libraries.main()
+                        self.assertEqual(done.exception.code,0)
+                        report=json.loads((out/'libraries-manifest.json').read_text())
+                        self.assertTrue(report['complete'])
+                        self.assertEqual(report['files'],{library.name:libraries.digest(library)})
+                    else:
+                        with self.assertRaises(ValueError):libraries.main()
+                        self.assertEqual({p.name:p.read_bytes() for p in out.iterdir()},before)
+                    codegen.assert_not_called()
+
     def qualified_observation(self):
         return dict(qualified=True, backend='metal', version='fixture',
                     observation_schema=2,

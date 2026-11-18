@@ -1,5 +1,11 @@
 # Project status
 
+## Preview 4 acceptance — 2026-11-18
+
+The mod-capable private runtime and launcher build 4 were built from clean source `037e49d2445baf8529dda389d216564b72b9850d`. 65 Swift tests, 128 focused CPU checks and independent source review passed. Fresh preparation reused 42,466 compiled libraries and verified 28,786 pipeline rows, including 196 mesh, with zero JIT attempts, misses or archive writes. A genuine receipt binds preparation to the new executable.
+
+Actual unmodded and PlayStation-prompts-mod runs reached Death Mountain Trail and Basic Controls on copied profiles. Visual differences and native replacement validation were observed; both normal exits and original-file preservation passed. This establishes the tested pack's production Core/helper/runtime path, not all mod compatibility or the Mods-tab-to-Play flow end to end. See [Preview 4 scope and limitations](release/preview-0.1.0-4.md). Distribution remains an experimental ad-hoc-signed, unnotarized manual launcher download; game data and shaders stay private. The dated sections below retain their original identities and scope.
+
 Updated **2026-11-16**. Launcher implementation reviewed at [`e580518`](https://github.com/christianfurr/Kokiri/commit/e5805182fbf503632941d553bdd937d095520e13). This page records reviewed milestones; source checks, private playability and public distribution are separate acceptance stages.
 
 **Kokiri is a playable private development preview.** Full v28 preparation completed for the accepted private package. The user reports good gameplay with occasional new pipeline compilation and accepted the audio change. Broader performance, memory and visual verification remain open; there is no stable signed/notarized public release.

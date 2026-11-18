@@ -66,18 +66,91 @@ def open_regular(directory: int, name: str, flags: int = os.O_RDONLY) -> int:
     return descriptor
 
 
-def read_metadata(directory: int, name: str) -> bytes:
+def read_metadata(directory: int, name: str, limit: int = METADATA_LIMIT) -> bytes:
     with os.fdopen(open_regular(directory, name), "rb") as source:
         before = os.fstat(source.fileno())
-        if not 0 < before.st_size <= METADATA_LIMIT:
-            raise PreviewError("Preview metadata must be between 1 byte and 64 KiB.")
-        data = source.read(METADATA_LIMIT + 1)
+        if not 0 < before.st_size <= limit:
+            raise PreviewError("Preview metadata exceeds its bounded size.")
+        data = source.read(limit + 1)
         if len(data) != before.st_size or identity(before) != identity(os.fstat(source.fileno())):
             raise PreviewError("Preview metadata changed while being read.")
         return data
 
 
-def launch(app: Path, private_root: Path) -> int:
+def mod_file(directory: int, relative: str) -> int:
+    if (not relative or len(relative.encode()) >= 4000 or "\\" in relative or ":" in relative
+            or any(ord(c) < 32 or ord(c) == 127 for c in relative)
+            or any(part in {"", ".", ".."} for part in relative.split("/"))):
+        raise PreviewError("The mod manifest contains an invalid relative path.")
+    current = os.dup(directory)
+    try:
+        parts = relative.split("/")
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=current)
+            os.close(current)
+            current = child
+            if os.fstat(current).st_uid != os.getuid():
+                raise PreviewError("Mod snapshot directories must belong to this user.")
+        return open_regular(current, parts[-1])
+    finally:
+        os.close(current)
+
+
+def validate_mods(root_fd: int, info: dict, preview: dict, session: str, handoff_hash: str) -> None:
+    if (type(info.get("KokiriHumanPreviewModsVersion")) is not int or info["KokiriHumanPreviewModsVersion"] != 1
+            or not re.fullmatch("[0-9a-f]{32}", session) or not re.fullmatch("[0-9a-f]{64}", handoff_hash)):
+        raise PreviewError("This runtime or mod launch token does not support human mod overlays version 1.")
+    descriptors = []
+    try:
+        for parent, name in ((root_fd, "mods"), (None, session), (None, "mods")):
+            fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                         dir_fd=parent if parent is not None else descriptors[-1])
+            descriptors.append(fd)
+            st = os.fstat(fd)
+            if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o700:
+                raise PreviewError("Mod launch folders must be private and owned by this user.")
+        raw = read_metadata(descriptors[1], "handoff.json")
+        record = json.loads(raw)
+        if (not isinstance(record, dict) or set(record) != {"schema", "kind", "session_id", "launch_id", "executable_sha256", "manifest_sha256"}
+                or type(record.get("schema")) is not int or record["schema"] != 1
+                or record.get("kind") != "human-mod-overlay" or record.get("session_id") != preview["session_id"]
+                or record.get("launch_id") != session or record.get("executable_sha256") != preview["executable_sha256"]
+                or not isinstance(record.get("manifest_sha256"), str) or not re.fullmatch("[0-9a-f]{64}", record["manifest_sha256"])
+                or hashlib.sha256(raw).hexdigest() != handoff_hash):
+            raise PreviewError("The mod handoff changed or belongs to a different game session.")
+        manifest = read_metadata(descriptors[2], "manifest.tsv", 8 << 20)
+        if hashlib.sha256(manifest).hexdigest() != record["manifest_sha256"]:
+            raise PreviewError("The mod manifest changed after snapshot preparation.")
+        names = set()
+        for line in manifest.decode("utf-8").splitlines():
+            if not line or line.startswith("#"):
+                continue
+            fields = line.split("\t")
+            if (len(fields) != 4 or not re.fullmatch("[0-9]{1,20}", fields[1])
+                    or int(fields[1]) > 4 << 30 or not re.fullmatch("[0-9a-f]{64}", fields[2])
+                    or fields[3] != "-" and not re.fullmatch("[0-9a-f]{64}", fields[3])
+                    or fields[0] in names):
+                raise PreviewError("The mod manifest is malformed.")
+            names.add(fields[0])
+            if len(names) > 20000:
+                raise PreviewError("A mod launch may contain at most 20,000 files.")
+            with os.fdopen(mod_file(descriptors[2], fields[0]), "rb") as source:
+                before = os.fstat(source.fileno())
+                if before.st_size != int(fields[1]):
+                    raise PreviewError("A mod snapshot file has the wrong size.")
+                digest = hashlib.file_digest(source, "sha256").hexdigest()
+                if digest != fields[2] or identity(before) != identity(os.fstat(source.fileno())):
+                    raise PreviewError("A mod snapshot file changed after preparation.")
+        if not names or read_metadata(descriptors[2], "manifest.tsv", 8 << 20) != manifest:
+            raise PreviewError("The mod manifest is empty or changed during validation.")
+    finally:
+        for fd in reversed(descriptors):
+            os.close(fd)
+
+
+def launch(app: Path, private_root: Path, mods_session: str | None = None, mods_sha256: str | None = None) -> int:
+    if (mods_session is None) != (mods_sha256 is None):
+        raise PreviewError("A mod launch needs both its session token and handoff hash.")
     account = pwd.getpwuid(os.getuid())
     home = Path(account.pw_dir)
     app = canonical_directory(app)
@@ -140,6 +213,10 @@ def launch(app: Path, private_root: Path) -> int:
                     or identity(binary_info) != identity(os.fstat(binary.fileno()))):
                 raise PreviewError("The main executable does not match the pinned preview request.")
         executable = executable_directory / "KokiriGame"
+        arguments = [str(executable), "--kokiri-preview", str(root)]
+        if mods_session is not None:
+            validate_mods(root_fd, info, request, mods_session, mods_sha256)
+            arguments += ["--mods-session", mods_session, "--mods-sha256", mods_sha256]
         environment = {"HOME": account.pw_dir, "USER": account.pw_name, "LOGNAME": account.pw_name,
                        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
                        "KOKIRI_HUMAN_PREVIEW_ROOT": str(root)}
@@ -150,7 +227,7 @@ def launch(app: Path, private_root: Path) -> int:
                 raise PreviewError("The private root changed before launch.")
             if identity(executable.lstat()) != identity(binary_info):
                 raise PreviewError("The pinned executable changed before launch.")
-            process = subprocess.Popen([str(executable), "--kokiri-preview", str(root)], cwd=app,
+            process = subprocess.Popen(arguments, cwd=app,
                                        env=environment, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                        start_new_session=True, close_fds=True)
         return process.pid
@@ -164,9 +241,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", required=True, type=Path)
     parser.add_argument("--private-root", required=True, type=Path)
+    parser.add_argument("--mods-session")
+    parser.add_argument("--mods-sha256")
     args = parser.parse_args()
     try:
-        process_id = launch(args.app, args.private_root)
+        process_id = launch(args.app, args.private_root, args.mods_session, args.mods_sha256)
     except (OSError, ValueError, plistlib.InvalidFileException) as error:
         print(f"Human preview was not started: {error}", file=sys.stderr)
         return 1

@@ -22,13 +22,14 @@ final class ModLibraryTests: XCTestCase {
 
     private func sha(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
-    private func game(_ root: URL, marker: Any? = 1, preview: Any? = nil) throws -> URL {
+    private func game(_ root: URL, marker: Any? = 1, preview: Any? = nil, humanMods: Any? = nil) throws -> URL {
         let app = root.appendingPathComponent("Game.app"), resources = app.appendingPathComponent("Contents/Resources/totk")
         let romfs = resources.appendingPathComponent("extracted/oot/romfs")
         try fm.createDirectory(at: romfs, withIntermediateDirectories: true)
         var info: [String: Any] = ["CFBundleIdentifier": "tests.kokiri.mods." + UUID().uuidString, "CFBundlePackageType": "APPL"]
         if let marker { info["KokiriRomFSModsVersion"] = marker }
         if let preview { info["KokiriHumanPreviewVersion"] = preview }
+        if let humanMods { info["KokiriHumanPreviewModsVersion"] = humanMods }
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: app.appendingPathComponent("Contents/Info.plist"))
         var index = Data("TOTKRFS1".utf8)
         func append(_ value: UInt64, count: Int) { for byte in 0..<count { index.append(UInt8(truncatingIfNeeded: value >> (byte * 8))) } }
@@ -126,6 +127,27 @@ final class ModLibraryTests: XCTestCase {
         XCTAssertThrowsError(try library.importFolder(dependent))
         XCTAssertThrowsError(try library.importFolder(dependent.appendingPathComponent("romfs")))
         XCTAssertTrue(try library.load().packs.isEmpty)
+    }
+
+    func testPrivateCapabilityUsesSeparateGuardAndRealSessionManifest() throws {
+        let unsupported: [Any?] = [nil, true, 1.0, "1", 2]
+        for marker in unsupported {
+            let root = try fixture(), app = try game(root, preview: 1, humanMods: marker)
+            XCTAssertNotNil(ModLibrary.launchBlocker(app: app, mode: .humanPreview))
+        }
+        let root = try fixture(), app = try game(root, preview: 1, humanMods: 1)
+        XCTAssertNil(ModLibrary.launchBlocker(app: app, mode: .humanPreview))
+        XCTAssertNotNil(ModLibrary.launchBlocker(app: app))
+        let library = ModLibrary(root: root.appendingPathComponent("Library"))
+        try library.importFolder(pack(root, "One"))
+        try library.setEnabled(try library.load().packs[0].id, enabled: true)
+        let session = root.appendingPathComponent("Session")
+        try fm.createDirectory(at: session, withIntermediateDirectories: true)
+        let environment = try library.prepareLaunch(app: app, gameDataFolder: root, sessionFolder: session, mode: .humanPreview)
+        let manifest = try String(contentsOf: session.appendingPathComponent("mods/manifest.tsv"), encoding: .utf8)
+        XCTAssertEqual(environment["TOTK_ROMFS_MODS"], session.appendingPathComponent("mods").path)
+        XCTAssertTrue(manifest.contains(sha(Data("original".utf8))))
+        XCTAssertThrowsError(try library.prepareLaunch(app: app, gameDataFolder: root, sessionFolder: root))
     }
 
     func testWrongIndexAndWrongImageMarkerRefusedBeforeOverlayPublication() throws {

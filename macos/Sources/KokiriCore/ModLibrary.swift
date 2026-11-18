@@ -29,6 +29,8 @@ public struct ModLibraryState: Codable, Equatable, Sendable {
 }
 
 /// A separate Kokiri library. Foreign manager libraries are read-only import sources.
+public enum ModLaunchMode: Sendable { case ordinary, humanPreview }
+
 public struct ModLibrary: Sendable {
     public let root: URL
     private var record: URL { root.appendingPathComponent("library.json") }
@@ -39,16 +41,23 @@ public struct ModLibrary: Sendable {
 
     public static func supportsLaunch(app: URL) -> Bool { launchBlocker(app: app) == nil }
 
-    public static func launchBlocker(app: URL) -> String? {
+    public static func launchBlocker(app: URL, mode: ModLaunchMode = .ordinary) -> String? {
         guard let data = try? boundedData(app.appendingPathComponent("Contents/Info.plist"), limit: 1 << 20),
               let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
             return "The connected game does not advertise verified mod support."
         }
-        if info["KokiriHumanPreviewVersion"] != nil { return "This private game preview does not support launching mod profiles yet." }
-        guard let version = info["KokiriRomFSModsVersion"] as? NSNumber,
+        if mode == .ordinary, info["KokiriHumanPreviewVersion"] != nil { return "This private game preview needs its verified human launch path for mods." }
+        let key = mode == .humanPreview ? "KokiriHumanPreviewModsVersion" : "KokiriRomFSModsVersion"
+        if mode == .humanPreview {
+            guard let marker = info["KokiriHumanPreviewVersion"] as? NSNumber,
+                  CFGetTypeID(marker) != CFBooleanGetTypeID(), ["c", "s", "i", "l", "q", "C", "S", "I", "L", "Q"].contains(String(cString: marker.objCType)), marker.intValue == 1 else {
+                return "The connected game is not a supported human preview."
+            }
+        }
+        guard let version = info[key] as? NSNumber,
               CFGetTypeID(version) != CFBooleanGetTypeID(), ["c", "s", "i", "l", "q", "C", "S", "I", "L", "Q"].contains(String(cString: version.objCType)),
               version.intValue == 1 else {
-            return "The connected game needs a build with Kokiri RomFS mod support version 1."
+            return mode == .humanPreview ? "This preview needs the runtime update for mod launching." : "The connected game needs a build with Kokiri RomFS mod support version 1."
         }
         return nil
     }
@@ -198,16 +207,17 @@ public struct ModLibrary: Sendable {
     }
 
     /// Creates a session-owned immutable overlay. Never changes the game or foreign manager folders.
-    public func prepareLaunch(app: URL, gameDataFolder: URL, sessionFolder: URL) throws -> [String: String] {
+    public func prepareLaunch(app: URL, gameDataFolder: URL, sessionFolder: URL, mode: ModLaunchMode = .ordinary) throws -> [String: String] {
         let state = try load()
         let enabled = state.selected.order.filter { state.selected.enabled.contains($0) }
         guard !enabled.isEmpty else { return ["TOTK_ROMFS_MODS": "0"] }
-        if let reason = Self.launchBlocker(app: app) { throw fail(reason) }
+        if let reason = Self.launchBlocker(app: app, mode: mode) { throw fail(reason) }
         var files: [String: URL] = [:]
         for id in enabled {
             for file in try Self.payloadFiles(packFolder(id).appendingPathComponent("romfs")) { files[file.path] = file.url }
         }
-        let reference = try ModROMFS(app: app, gameDataFolder: gameDataFolder)
+        guard files.count <= 20000 else { throw fail("A launch overlay may contain at most 20,000 files.") }
+        let reference = try ModROMFS(app: app, gameDataFolder: gameDataFolder, mode: mode)
         let destination = sessionFolder.appendingPathComponent("mods")
         guard !FileManager.default.fileExists(atPath: destination.path) else { throw fail("This session already has a mod overlay.") }
         try Self.directory(sessionFolder)
@@ -415,7 +425,7 @@ private struct ModROMFS {
     private let folded: Set<String>
     let reserved: Set<String>
 
-    init(app: URL, gameDataFolder: URL) throws {
+    init(app: URL, gameDataFolder: URL, mode: ModLaunchMode) throws {
         let resources = app.appendingPathComponent("Contents/Resources/totk")
         let romfs = resources.appendingPathComponent("extracted/oot/romfs")
         let data = try ModLibrary.boundedData(romfs.appendingPathComponent("runtime-index.bin"), limit: 128 << 20)
@@ -453,10 +463,10 @@ private struct ModROMFS {
         }
         let bundle = Bundle(url: app)
         let identifier = bundle?.bundleIdentifier ?? "com.christianfurr.kokiri.runtime"
-        let defaults = UserDefaults(suiteName: identifier)?.string(forKey: "MNGGameDataFolder.oot")
+        let defaults = mode == .ordinary ? UserDefaults(suiteName: identifier)?.string(forKey: "MNGGameDataFolder.oot") : nil
         let configured = bundle?.object(forInfoDictionaryKey: "MNGGameDataFolder") as? String
         let folders = [defaults, configured].compactMap { $0 }.filter { !$0.isEmpty }.map { URL(fileURLWithPath: $0) }
-            + [gameDataFolder.appendingPathComponent("GameData")]
+            + (mode == .ordinary ? [gameDataFolder.appendingPathComponent("GameData")] : [])
         let candidates = [romfs.appendingPathComponent("romfs.bin")]
             + folders.flatMap { [$0.appendingPathComponent("oot/romfs.bin"), $0.appendingPathComponent("romfs.bin")] }
         let image = candidates.first { candidate in

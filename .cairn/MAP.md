@@ -1,16 +1,19 @@
 ---
-verified_at_sha: e7be679bf065190a246a72b9820790db5b5de3a1
-verified_at: 2026-11-16
+verified_at_sha: f0cc8191b604ce11bc645204c5cb208a8dd7cf05
+verified_at: 2026-11-17
 ---
 # Kokiri
 
 Independent Mac project. [STATUS.md](../STATUS.md) is the dated public acceptance summary; [BUILDING.md](../BUILDING.md) covers current build/import entry points. The map's documentation and publication routes were checked against the source revision above; acceptance requirements are not completion claims.
+
+The 2026-11-17 refresh covers the human mod launch source/helper/fixture routes. Other acceptance summaries retain their stated historical scope.
 
 - `.cairn/features/2026-11-15-kokiri-foundation/PRD.md`: accepted project scope and verification gates.
 - `.cairn/DECISIONS.md`: product/runtime boundaries and attribution decisions.
 - `docs/integration-acceptance.md`: specialist boundaries, preservation, full-v28 evidence, matched gameplay gates and integration/release requirements; these are requirements, not completed acceptance.
 - `.cairn/features/2026-11-15-agent-workbench/PRD.md` and `docs/development-workbench.md`: disposable agent sessions, credited transactional save editing and typed development controls; actual packaged-runtime isolation and host adoption remain acceptance gates.
 - `.cairn/features/2026-11-16-mods-saves/`: dedicated Mods profiles/imports and read-only Saves viewer; ordinary overlay launch requires an explicit compatible runtime. Existing private preview remains library-only for mods.
+- `.cairn/features/2026-11-17-human-mod-launch/`: separate source candidate for capability-versioned human mod snapshots and bounded full-v28 reuse verification; native/game acceptance and installation remain separate gates.
 - `docs/human-preview.md`: private human-owned runtime entry and clean external spawn; compiled source and real packaged isolation are separate acceptance gates. The renderer stays `Contents/MacOS/KokiriGame`.
 - `LICENSE`: MIT terms preserving upstream copyright.
 - `engine/`: pinned public native runtime, reviewed ownership/mesh/NS2 transfer fixes, standalone build entry. External source-built shader tools use serviced NativeAOT 10.0.14; copied-profile gameplay verification is in progress.
