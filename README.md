@@ -31,7 +31,7 @@ Kokiri also develops an **open shader and pipeline catalog** that compatible pro
 
 ## Install guide
 
-An [experimental prebuilt launcher](https://github.com/christianfurr/Kokiri/releases/tag/v0.1.0-preview.4) is available for manual installation. It is ad-hoc signed and not notarized; see the [download and first-launch notes](release/preview-0.1.0-4.md). Preparing a new game still requires the source checkout and build tools below. There is no stable signed/notarized installer. The launcher and your private game app are separate builds; if you already have a compatible native game app, skip step 3.
+An [experimental prebuilt launcher](https://github.com/christianfurr/Kokiri/releases/tag/v0.4.1) is available for manual installation. It is ad-hoc signed and not notarized; see the [download and first-launch notes](release/hotfix-0.4.1.md). Preparing a new game still requires the source checkout and build tools below. There is no stable signed/notarized installer. The launcher and your private game app are separate builds; if you already have a compatible native game app, skip step 3.
 
 | Requirement | Current support |
 | --- | --- |

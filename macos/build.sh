@@ -35,7 +35,7 @@ import base64, json, os, plistlib, re, subprocess, sys
 from pathlib import Path
 from urllib.parse import urlsplit
 app=Path(sys.argv[1]);feed=os.environ.get('KOKIRI_UPDATE_FEED');key=os.environ.get('KOKIRI_UPDATE_PUBLIC_KEY')
-version=os.environ.get('KOKIRI_VERSION','0.1.0');build=os.environ.get('KOKIRI_BUILD_NUMBER','1')
+version=os.environ.get('KOKIRI_VERSION','0.4.1');build=os.environ.get('KOKIRI_BUILD_NUMBER','5')
 if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[a-zA-Z0-9.-]+)?',version):
     raise SystemExit('KOKIRI_VERSION must be a semantic version')
 if not re.fullmatch(r'[1-9][0-9]{0,11}',build):raise SystemExit('KOKIRI_BUILD_NUMBER must be a positive numeric build number')

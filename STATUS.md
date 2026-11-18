@@ -1,5 +1,9 @@
 # Project status
 
+## Version-label hotfix — 2026-11-18
+
+Launcher version **0.4.1 (5)** replaces the confusing 0.1.0 (4) label. This is a metadata-only repackage of Preview 4; its compiled code remains unchanged and retains its actual source identity. Source-build defaults follow 0.4.1 (5). There was no separate 0.4.0 publication. See [hotfix notes](release/hotfix-0.4.1.md); experimental distribution and the gameplay qualification limits below remain in effect.
+
 ## Preview 4 acceptance — 2026-11-18
 
 The mod-capable private runtime and launcher build 4 were built from clean source `037e49d2445baf8529dda389d216564b72b9850d`. 65 Swift tests, 128 focused CPU checks and independent source review passed. Fresh preparation reused 42,466 compiled libraries and verified 28,786 pipeline rows, including 196 mesh, with zero JIT attempts, misses or archive writes. A genuine receipt binds preparation to the new executable.

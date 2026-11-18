@@ -1,5 +1,7 @@
 # Decisions
 
+- 2026-11-18: The user chose 0.4.x product versioning and requested 0.4.1 for the version-label hotfix. Use launcher 0.4.1 (5), retain actual compiled source identity for metadata-only repackages, and record packaging provenance separately. Historical Preview 4 remains 0.1.0 (4); do not rewrite its artifacts or runtime preparation identity.
+
 - 2026-11-17: The user requested actual private-runtime mod launching. A separate `KokiriHumanPreviewModsVersion=1` handoff admits only a pinned per-launch snapshot under the verified human root. Empty profiles retain unmodded launch. Cached native requests, compiler/library hashes and full pipeline archives must be freshly checked for the new executable before a new receipt; Integration alone accepts/builds/installs the candidate.
 
 - 2026-11-16: User selected Compact split for Mods/Saves, then requested MacNative Mods as the Mods interface reference. Use a compact table and inspector for mods, slot list and preview for saves, with secondary details collapsed. Invalid requested private bindings fail closed instead of falling back to ordinary player data.
